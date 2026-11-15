@@ -23,6 +23,38 @@ function makePages(data: ReaderChapter): ReaderPage[] {
   }))
 }
 
+function ReaderImageRow({ page, cache, requests, width, placeholderHeight, showControls }: {
+  page: ReaderPage
+  cache: ReaderCache
+  requests: ReaderRequests
+  width: number
+  placeholderHeight: number
+  showControls: () => void
+}) {
+  const update = useObservable(0)
+  useEffect(() => {
+    const invalidate = () => update.setValue(update.value + 1)
+    const stop = requests.observe(page.url, invalidate)
+    invalidate()
+    return stop
+  }, [page.url, requests])
+
+  void update.value
+  const loaded = cache.images.get(page.url)
+  const ratio = cache.ratios.get(page.url)
+  const height = ratio ? width * ratio : placeholderHeight
+  return (
+    <ZStack frame={{ width, height }} contentShape="rect" onTapGesture={loaded ? undefined : showControls}>
+      {loaded ? (
+        <Image image={loaded.image} resizable frame={{ width, height }}
+          contentShape="rect" onTapGesture={showControls} />
+      ) : requests.failed.has(page.url)
+        ? <Button title={`重试第 ${page.number} 张`} action={() => requests.retry(page.url)} />
+        : <ProgressView tint="white" />}
+    </ZStack>
+  )
+}
+
 function ReaderDirectory({ chapters, select }: { chapters: Chapter[]; select: (chapter: Chapter) => void }) {
   const dismiss = Navigation.useDismiss()
   return (
@@ -69,10 +101,12 @@ export function ChapterReader({ book, chapter, initialPage, opening, cache, getC
   const needsToken = useObservable(openingError instanceof ApiError && (openingError.code === 401 || openingError.status === 401))
   const tokenPromptOpen = useRef(false)
   const warning = useObservable("")
-  const revision = useObservable(0)
+  const observingTail = useObservable(false)
   const mounted = useRef(true)
   const scrollKey = useObservable(0)
   const visible = useRef<string[]>([])
+  const activePage = useRef<ReaderPage | null>(null)
+  const indexed = useRef<{ items: ReaderPage[]; byID: Map<string, number> } | null>(null)
   const target = useRef<string | null>(initialTarget?.id ?? null)
   const last = useRef<ReadingRecord | null>(null)
   const lastSaved = useRef("")
@@ -106,23 +140,34 @@ export function ChapterReader({ book, chapter, initialPage, opening, cache, getC
     dismiss()
   }
 
+  function visibleIndexes(ids: string[]) {
+    const items = pages.value
+    if (indexed.current?.items !== items) {
+      indexed.current = { items, byID: new Map(items.map((page, index) => [page.id, index])) }
+    }
+    const byID = indexed.current.byID
+    return ids.map(id => byID.get(id)).filter((index): index is number => index !== undefined).sort((a, b) => a - b)
+  }
+
   function prioritize(ids: string[]) {
     const items = pages.value
-    const start = items.findIndex(page => ids.includes(page.id))
-    if (start < 0) return
-    const first = items[start]
-    const nearby = items.filter(page => ids.includes(page.id))
-    const end = Math.max(start, items.indexOf(nearby[nearby.length - 1]))
+    const indexes = visibleIndexes(ids)
+    if (!indexes.length) return
+    const nearby = indexes.map(index => items[index])
+    const start = indexes[0]
+    const end = indexes[indexes.length - 1]
     const ahead = items.slice(end + 1, end + 6)
+    const behind = items.slice(Math.max(0, start - 2), start).reverse()
     const tail = items[items.length - 1]
-    const nextChapter = getAdjacent(tail.chapter, 1)
     const nearEnd = items.length - 1 - end <= 5
     const prefetchState = prefetch.current
     const nextImages = nearEnd && prefetchState?.forChapter === tail.chapter.id
       ? prefetchState.data?.images.slice(0, 3) ?? [] : []
-    requests.prioritize([first.url, ...nearby.map(page => page.url), ...ahead.map(page => page.url), ...nextImages])
+    requests.prioritize([...nearby, ...ahead, ...behind].map(page => page.url).concat(nextImages))
 
-    if (nearEnd && nextChapter && prefetchState?.forChapter !== tail.chapter.id) {
+    if (nearEnd && prefetchState?.forChapter !== tail.chapter.id) {
+      const nextChapter = getAdjacent(tail.chapter, 1)
+      if (!nextChapter) return
       const waiting: { forChapter: number; data?: ReaderChapter } = { forChapter: tail.chapter.id }
       prefetch.current = waiting
       void requests.chapter(nextChapter).then(data => {
@@ -139,15 +184,26 @@ export function ChapterReader({ book, chapter, initialPage, opening, cache, getC
     const positionID = position.value
     const firstID = target.current ?? (positionID && ids.includes(positionID) ? positionID : null)
     target.current = null
+    const changed = ids.length !== visible.current.length || ids.some(id => !visible.current.includes(id))
     visible.current = ids
-    const first = firstID ? pages.value.find(page => page.id === firstID) : pages.value.find(page => ids.includes(page.id))
-    if (!first) return
-    if (selected.value.id !== first.chapter.id) selected.setValue(first.chapter)
-    prioritize(ids)
-    if (!cache.images.has(first.url)) return
-    if (last.current?.chapter.id === first.chapter.id && last.current.page === first.number) return
-    last.current = { book, chapter: first.chapter, page: first.number, pageCount: first.count, readAt: Date.now() }
-    if (saveTimer.current === undefined) saveTimer.current = setTimeout(save, 450)
+    const tail = pages.value[pages.value.length - 1]
+    const watchTail = tail !== undefined && ids.includes(tail.id)
+    if (observingTail.value !== watchTail) observingTail.setValue(watchTail)
+    if (changed) prioritize(ids)
+    const index = visibleIndexes(firstID ? [firstID] : ids)[0]
+    const page = pages.value[index]
+    activePage.current = page ?? null
+    if (!page) return
+    if (selected.value.id !== page.chapter.id) selected.setValue(page.chapter)
+    recordVisiblePage(page)
+  }
+
+  function recordVisiblePage(page: ReaderPage) {
+    if (!cache.images.has(page.url)) return
+    if (last.current?.chapter.id === page.chapter.id && last.current.page === page.number) return
+    last.current = { book, chapter: page.chapter, page: page.number, pageCount: page.count, readAt: Date.now() }
+    clearTimeout(saveTimer.current)
+    saveTimer.current = setTimeout(save, 850)
   }
 
   function onPositionChanged(id: string | null) {
@@ -204,6 +260,8 @@ export function ChapterReader({ book, chapter, initialPage, opening, cache, getC
       save()
       last.current = null
       visible.current = []
+      activePage.current = null
+      observingTail.setValue(false)
       prefetch.current = null
       const items = makePages(data)
       const start = items[Math.min(items.length, Math.max(1, resumePage)) - 1]
@@ -232,6 +290,7 @@ export function ChapterReader({ book, chapter, initialPage, opening, cache, getC
     try {
       const data = await requests.chapter(next)
       if (!mounted.current) return
+      observingTail.setValue(false)
       pages.setValue([...items, ...makePages(data)])
       prioritize(visible.current)
     } catch (cause) {
@@ -269,9 +328,9 @@ export function ChapterReader({ book, chapter, initialPage, opening, cache, getC
 
   useEffect(() => {
     mounted.current = true
-    requests.changed = () => {
-      revision.setValue(revision.value + 1)
-      if (visible.current.length) reportVisible(visible.current)
+    requests.changed = url => {
+      const page = activePage.current
+      if (page?.url === url && visible.current.includes(page.id)) recordVisiblePage(page)
     }
     position.subscribe(onPositionChanged)
     if (initialTarget) prioritize([initialTarget.id])
@@ -286,9 +345,8 @@ export function ChapterReader({ book, chapter, initialPage, opening, cache, getC
   }, [])
 
   const items = pages.value
-  void revision.value
-  const previous = getAdjacent(selected.value, -1)
-  const next = getAdjacent(selected.value, 1)
+  const previous = controls.value ? getAdjacent(selected.value, -1) : undefined
+  const next = controls.value ? getAdjacent(selected.value, 1) : undefined
 
   return (
     <ZStack frame={{ maxWidth: "infinity", maxHeight: "infinity" }} background="black"
@@ -307,7 +365,7 @@ export function ChapterReader({ book, chapter, initialPage, opening, cache, getC
                 idType: "string", threshold: 0,
                 onChanged: ids => reportVisible(ids.filter((id): id is string => typeof id === "string")),
               }}
-              onScrollGeometryChange={{
+              onScrollGeometryChange={observingTail.value ? {
                 of: "geometry",
                 onChanged: (previous, current) => {
                   const tail = pages.value[pages.value.length - 1]
@@ -318,31 +376,15 @@ export function ChapterReader({ book, chapter, initialPage, opening, cache, getC
                     void appendChapter()
                   }
                 },
-              }}
+              } : undefined}
             >
               <LazyVStack spacing={0} scrollTargetLayout>
-                {items.map(page => {
-                  const loaded = cache.images.get(page.url)
-                  const width = geometry.size.width
-                  const ratio = loaded?.ratio ?? cache.ratios.get(page.url)
-                  const height = ratio ? width * ratio : geometry.size.height
-                  return (
-                    <VStack key={page.id} spacing={0}>
-                      <ZStack
-                        frame={{ width, height }}
-                        contentShape="rect"
-                        onTapGesture={loaded ? undefined : showControls}
-                      >
-                        {loaded ? (
-                          <Image image={loaded.image} resizable frame={{ width, height }}
-                            contentShape="rect" onTapGesture={showControls} />
-                        ) : requests.failed.has(page.url)
-                          ? <Button title={`重试第 ${page.number} 张`} action={() => requests.retry(page.url)} />
-                          : <ProgressView tint="white" />}
-                      </ZStack>
-                    </VStack>
-                  )
-                })}
+                {items.map(page => (
+                  <VStack key={page.id} spacing={0}>
+                    <ReaderImageRow page={page} cache={cache} requests={requests} width={geometry.size.width}
+                      placeholderHeight={geometry.size.height} showControls={showControls} />
+                  </VStack>
+                ))}
               </LazyVStack>
             </ScrollView>
           )}
