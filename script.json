@@ -1,9 +1,9 @@
 {
   "name": "响应解密",
-  "version": "1.5.1",
+  "version": "1.6.0",
   "entry": "index.tsx",
   "icon": "lock.open",
   "color": "#007AFF",
-  "description": "按分类浏览漫画并查看详情和章节目录，缓存仅保留在本次运行。",
+  "description": "全屏阅读漫画，支持本机续读进度和观看历史。",
   "runInApp": true
 }
