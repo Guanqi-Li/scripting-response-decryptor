@@ -106,7 +106,11 @@ export class ReaderRequests {
       if (signal.aborted) return
       const image = UIImage.fromData(data)
       if (!image) throw new Error("图片解码失败。")
-      this.cache.store(url, image)
+      const inset = 2 / image.scale
+      const cropped = image.width > inset * 2
+        ? image.croppedTo?.({ x: inset, y: 0, width: image.width - inset * 2, height: image.height })
+        : null
+      this.cache.store(url, cropped ?? image)
       this.cache.trim(new Set(this.wanted))
     } catch {
       if (!signal.aborted) this.failed.add(url)
