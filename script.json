@@ -1,9 +1,9 @@
 {
   "name": "响应解密",
-  "version": "1.2.1",
+  "version": "1.3.0",
   "entry": "index.tsx",
   "icon": "lock.open",
   "color": "#007AFF",
-  "description": "启动时自动加载并解密分类，支持横向滚动和选择。",
+  "description": "按分类浏览漫画，支持本地缓存和触底加载下一页。",
   "runInApp": true
 }
