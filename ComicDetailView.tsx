@@ -5,8 +5,8 @@ import {
 import { ComicCover, type CoverCache } from "./ComicGrid"
 import { ChapterDirectoryView, getAdjacentChapter, getChapters, type ChapterDirectoryCache } from "./ChapterDirectoryView"
 import { fetchBookDetails, type Chapter, type Comic } from "./catalog"
-import { ChapterReader } from "./ChapterReader"
-import type { ReaderCache } from "./reader-cache"
+import { ChapterReader, type ReaderOpening } from "./ChapterReader"
+import { ReaderRequests, type ReaderCache } from "./reader-cache"
 import { chapterLabel, type ReadingRecord } from "./reading-history"
 
 export function ComicDetailView({ book, covers, cache, directories, readerCache, progress, refreshHistory }: {
@@ -23,12 +23,15 @@ export function ComicDetailView({ book, covers, cache, directories, readerCache,
   const active = useRef<AbortController | null>(null)
   const [firstChapter, setFirstChapter] = useState<Chapter | null>(directories.get(book.bookID)?.pages.get(1)?.[0] ?? null)
   const opening = useRef(false)
+  const preparation = useRef<ReaderRequests | null>(null)
 
   useEffect(() => {
     if (!detail) void loadDetails()
     return () => {
       active.current?.abort()
       active.current = null
+      preparation.current?.close()
+      preparation.current = null
     }
   }, [book.bookID])
 
@@ -54,9 +57,21 @@ export function ComicDetailView({ book, covers, cache, directories, readerCache,
   async function openReader(chapter: Chapter, page = 1) {
     if (opening.current) return
     opening.current = true
+    const requests = new ReaderRequests(readerCache, display.bookID)
+    preparation.current = requests
     try {
+      let result: ReaderOpening
+      try {
+        result = { data: await requests.chapter(chapter) }
+      } catch (error) {
+        result = { error }
+      }
+      if (preparation.current !== requests) return
+      preparation.current = null
+      requests.close()
+
       await Navigation.present({
-        element: <ChapterReader book={display} chapter={chapter} initialPage={page} cache={readerCache}
+        element: <ChapterReader book={display} chapter={chapter} initialPage={page} opening={result} cache={readerCache}
           getChapters={() => getChapters(book.bookID, directories)}
           getAdjacent={(current, direction) => getAdjacentChapter(book.bookID, directories, current, direction)} />,
         modalPresentationStyle: "fullScreen",
@@ -64,6 +79,10 @@ export function ComicDetailView({ book, covers, cache, directories, readerCache,
     } catch (error) {
       await Dialog.alert({ title: "无法打开阅读器", message: error instanceof Error ? error.message : String(error) })
     } finally {
+      if (preparation.current === requests) {
+        preparation.current = null
+        requests.close()
+      }
       opening.current = false
       refreshHistory()
     }
