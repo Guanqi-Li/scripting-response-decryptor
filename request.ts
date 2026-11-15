@@ -30,6 +30,15 @@ export class ApiError extends Error {
   }
 }
 
+class NetworkError extends Error {}
+
+export function isTransientRequestError(error: unknown): boolean {
+  if (error instanceof NetworkError) return true
+  if (!(error instanceof ApiError)) return false
+  const code = error.code ?? error.status
+  return code === 408 || code === 429 || code >= 500
+}
+
 export async function requestAndDecrypt(input: string, token: string, signal: AbortSignal): Promise<{ status: number, value: unknown }> {
   const target = parseApiURL(input)
   let response: Response
@@ -46,7 +55,7 @@ export async function requestAndDecrypt(input: string, token: string, signal: Ab
     body = await response.text()
   } catch (error) {
     if (signal.aborted) throw new Error("请求已取消")
-    throw new Error("网络请求失败或超过 15 秒，请检查网址和网络连接。" + (error instanceof Error ? " " + error.message : ""))
+    throw new NetworkError("网络请求失败或超过 15 秒，请检查网址和网络连接。" + (error instanceof Error ? " " + error.message : ""))
   }
   const status = `HTTP ${response.status}`
   if (!body.trim()) throw new ApiError(`${status}：响应为空`, response.status)

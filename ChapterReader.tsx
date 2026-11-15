@@ -4,7 +4,7 @@ import {
 } from "scripting"
 import { setReaderToken, type Chapter, type Comic, type ReaderChapter } from "./catalog"
 import { ChapterDirectoryRows } from "./ChapterDirectoryView"
-import { ApiError } from "./request"
+import { ApiError, isTransientRequestError } from "./request"
 import { ReaderRequests, type ReaderCache } from "./reader-cache"
 import { chapterLabel, saveReadingRecord, type ReadingRecord } from "./reading-history"
 
@@ -23,12 +23,14 @@ function makePages(data: ReaderChapter): ReaderPage[] {
   }))
 }
 
-function ReaderImageRow({ page, cache, requests, width, placeholderHeight, showControls }: {
+function ReaderImageRow({ page, cache, requests, width, placeholderHeight, previousURL, nextURL, showControls }: {
   page: ReaderPage
   cache: ReaderCache
   requests: ReaderRequests
   width: number
   placeholderHeight: number
+  previousURL?: string
+  nextURL?: string
   showControls: () => void
 }) {
   const update = useObservable(0)
@@ -41,7 +43,9 @@ function ReaderImageRow({ page, cache, requests, width, placeholderHeight, showC
 
   void update.value
   const loaded = cache.images.get(page.url)
-  const ratio = cache.ratios.get(page.url)
+  const measured = cache.ratios.get(page.url)
+  const expected = useRef((previousURL && cache.ratios.get(previousURL)) || (nextURL && cache.ratios.get(nextURL)))
+  const ratio = measured || expected.current
   const height = ratio ? width * ratio : placeholderHeight
   return (
     <ZStack frame={{ width, height }} contentShape="rect" onTapGesture={loaded ? undefined : showControls}>
@@ -50,22 +54,29 @@ function ReaderImageRow({ page, cache, requests, width, placeholderHeight, showC
           contentShape="rect" onTapGesture={showControls} />
       ) : requests.failed.has(page.url)
         ? <Button title={`重试第 ${page.number} 张`} action={() => requests.retry(page.url)} />
+        : !page.url ? <Text foregroundStyle="white">第 {page.number} 张图片地址无效</Text>
         : <ProgressView tint="white" />}
     </ZStack>
   )
 }
 
-function ReaderDirectory({ chapters, select }: { chapters: Chapter[]; select: (chapter: Chapter) => void }) {
+function ReaderDirectory({ chapters, chapterID, select }: {
+  chapters: Chapter[]
+  chapterID: number
+  select: (chapter: Chapter) => void
+}) {
   const dismiss = Navigation.useDismiss()
+  const position = useObservable<number | null>(chapterID)
   return (
     <NavigationStack>
       <ScrollView
         navigationTitle="章节目录"
         navigationBarTitleDisplayMode="inline"
+        scrollPosition={{ value: position, anchor: "top" }}
         toolbar={{ cancellationAction: <Button title="关闭" action={() => { dismiss() }} /> }}
       >
         <VStack padding={16}>
-          <ChapterDirectoryRows chapters={chapters} openChapter={chapter => { select(chapter); dismiss() }} />
+          <ChapterDirectoryRows chapters={chapters} selectedChapterID={chapterID} openChapter={chapter => { select(chapter); dismiss() }} />
         </VStack>
       </ScrollView>
     </NavigationStack>
@@ -74,7 +85,8 @@ function ReaderDirectory({ chapters, select }: { chapters: Chapter[]; select: (c
 
 export type ReaderOpening = { data: ReaderChapter } | { error: unknown }
 
-export function ChapterReader({ book, chapter, initialPage, opening, cache, getChapters, getAdjacent }: {
+export function ChapterReader({ book, chapter, initialPage, opening, cache, getChapters, getAdjacent,
+  getMissingPage, reloadDirectoryPage }: {
   book: Comic
   chapter: Chapter
   initialPage: number
@@ -82,6 +94,8 @@ export function ChapterReader({ book, chapter, initialPage, opening, cache, getC
   cache: ReaderCache
   getChapters: () => Chapter[]
   getAdjacent: (chapter: Chapter, direction: -1 | 1) => Chapter | undefined
+  getMissingPage: (chapter: Chapter) => number | undefined
+  reloadDirectoryPage: (page: number, signal: AbortSignal) => Promise<void>
 }) {
   const dismiss = Navigation.useDismiss()
   const request = useRef<ReaderRequests | null>(null)
@@ -99,6 +113,10 @@ export function ChapterReader({ book, chapter, initialPage, opening, cache, getC
     ? openingError instanceof Error ? openingError.message : String(openingError)
     : "")
   const needsToken = useObservable(openingError instanceof ApiError && (openingError.code === 401 || openingError.status === 401))
+  const errorKind = useRef<"open" | "append">("open")
+  const directoryGap = useObservable<number | null>(null)
+  const directoryError = useObservable("")
+  const directoryRequest = useRef<AbortController | null>(null)
   const tokenPromptOpen = useRef(false)
   const warning = useObservable("")
   const mounted = useRef(true)
@@ -111,6 +129,7 @@ export function ChapterReader({ book, chapter, initialPage, opening, cache, getC
   const last = useRef<ReadingRecord | null>(null)
   const lastSaved = useRef("")
   const prefetch = useRef<{ forChapter: number; data?: ReaderChapter } | null>(null)
+  const prefetchTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const retry = useRef<(() => void) | null>(null)
   const saveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const hideTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
@@ -125,7 +144,7 @@ export function ChapterReader({ book, chapter, initialPage, opening, cache, getC
     try {
       saveReadingRecord(last.current)
       lastSaved.current = key
-      if (mounted.current) warning.setValue("")
+      if (mounted.current && warning.value) warning.setValue("")
     } catch {
       if (mounted.current) warning.setValue("阅读进度保存失败。")
     }
@@ -136,22 +155,22 @@ export function ChapterReader({ book, chapter, initialPage, opening, cache, getC
     mounted.current = false
     clearTimeout(hideTimer.current)
     save()
-    requests.close()
+    stopRequests()
     dismiss()
   }
 
-  function visibleIndexes(ids: string[]) {
+  function pageIndex() {
     const items = pages.value
     if (indexed.current?.items !== items) {
       indexed.current = { items, byID: new Map(items.map((page, index) => [page.id, index])) }
     }
-    const byID = indexed.current.byID
-    return ids.map(id => byID.get(id)).filter((index): index is number => index !== undefined).sort((a, b) => a - b)
+    return indexed.current.byID
   }
 
   function prioritize(ids: string[]) {
     const items = pages.value
-    const indexes = visibleIndexes(ids)
+    const positions = pageIndex()
+    const indexes = ids.map(id => positions.get(id)).filter((index): index is number => index !== undefined).sort((a, b) => a - b)
     if (!indexes.length) return
     const nearby = indexes.map(index => items[index])
     const start = indexes[0]
@@ -163,36 +182,61 @@ export function ChapterReader({ book, chapter, initialPage, opening, cache, getC
     const prefetchState = prefetch.current
     const nextImages = nearEnd && prefetchState?.forChapter === tail.chapter.id
       ? prefetchState.data?.images.slice(0, 3) ?? [] : []
-    requests.prioritize([...nearby, ...ahead, ...behind].map(page => page.url).concat(nextImages))
+    requests.prioritize([...nearby, ...ahead, ...behind].map(page => page.url).concat(nextImages).filter(Boolean),
+      nearby.map(page => page.url).filter(Boolean))
 
     if (nearEnd && prefetchState?.forChapter !== tail.chapter.id) {
       const nextChapter = getAdjacent(tail.chapter, 1)
       if (!nextChapter) return
       const waiting: { forChapter: number; data?: ReaderChapter } = { forChapter: tail.chapter.id }
       prefetch.current = waiting
-      void requests.chapter(nextChapter).then(data => {
-        if (!mounted.current || prefetch.current !== waiting) return
-        waiting.data = data
-        prioritize(visible.current.length ? visible.current : target.current ? [target.current] : [])
-      }).catch(() => {})
+
+      const preload = async (attempt: number) => {
+        try {
+          const data = await requests.chapter(nextChapter)
+          if (!mounted.current || prefetch.current !== waiting) return
+          waiting.data = data
+          prioritize(visible.current.length ? visible.current : target.current ? [target.current] : [])
+        } catch (error) {
+          if (!mounted.current || prefetch.current !== waiting || attempt > 0 || !isTransientRequestError(error)) return
+          prefetchTimer.current = setTimeout(() => {
+            const tailIndex = pageIndex().get(tail.id)
+            if (prefetch.current === waiting && tailIndex !== undefined &&
+              visible.current.some(id => (pageIndex().get(id) ?? -1) >= tailIndex - 5)) void preload(1)
+            else if (prefetch.current === waiting) prefetch.current = null
+          }, 700)
+        }
+      }
+      void preload(0)
     }
+  }
+
+  function confirmPage(id: string | null) {
+    if (!id || !visible.current.includes(id) || activePage.current?.id === id) return
+    const index = pageIndex().get(id)
+    if (index === undefined) return
+    const page = pages.value[index]
+    activePage.current = page
+    if (selected.value.id !== page.chapter.id) selected.setValue(page.chapter)
+    recordVisiblePage(page)
   }
 
   function reportVisible(ids: string[]) {
     if (!mounted.current) return
-    if (target.current && !ids.includes(target.current)) return
-    const positionID = position.value
-    const firstID = target.current ?? (positionID && ids.includes(positionID) ? positionID : null)
-    target.current = null
     const changed = ids.length !== visible.current.length || ids.some(id => !visible.current.includes(id))
     visible.current = ids
     if (changed) prioritize(ids)
-    const index = visibleIndexes(firstID ? [firstID] : ids)[0]
-    const page = pages.value[index]
-    activePage.current = page ?? null
-    if (!page) return
-    if (selected.value.id !== page.chapter.id) selected.setValue(page.chapter)
-    recordVisiblePage(page)
+    const restore = target.current
+    if (restore && !ids.includes(restore)) return
+    target.current = null
+    const current = position.value
+    if (restore || (current && ids.includes(current))) confirmPage(restore ?? current)
+    else if (!activePage.current || !ids.includes(activePage.current.id)) {
+      const positions = pageIndex()
+      const first = ids.reduce<string | null>((best, id) =>
+        (positions.get(id) ?? Infinity) < (best ? positions.get(best) ?? Infinity : Infinity) ? id : best, null)
+      confirmPage(first)
+    }
   }
 
   function recordVisiblePage(page: ReaderPage) {
@@ -204,7 +248,7 @@ export function ChapterReader({ book, chapter, initialPage, opening, cache, getC
   }
 
   function onPositionChanged(id: string | null) {
-    if (id && visible.current.includes(id)) reportVisible(visible.current)
+    if (mounted.current && !target.current) confirmPage(id)
   }
 
   function showControls() {
@@ -213,8 +257,9 @@ export function ChapterReader({ book, chapter, initialPage, opening, cache, getC
     if (controls.value) hideTimer.current = setTimeout(() => controls.setValue(false), 4500)
   }
 
-  function setChapterError(cause: unknown) {
+  function setChapterError(cause: unknown, kind: "open" | "append") {
     if (!mounted.current) return
+    errorKind.current = kind
     needsToken.setValue(cause instanceof ApiError && (cause.code === 401 || cause.status === 401))
     error.setValue(cause instanceof Error ? cause.message : String(cause))
   }
@@ -259,7 +304,10 @@ export function ChapterReader({ book, chapter, initialPage, opening, cache, getC
       visible.current = []
       activePage.current = null
       reachedEnd.current = null
+      clearTimeout(prefetchTimer.current)
       prefetch.current = null
+      directoryGap.setValue(null)
+      directoryError.setValue("")
       const items = makePages(data)
       const start = items[Math.min(items.length, Math.max(1, resumePage)) - 1]
       target.current = start.id
@@ -269,16 +317,23 @@ export function ChapterReader({ book, chapter, initialPage, opening, cache, getC
       pages.setValue(items)
       prioritize([start.id])
     } catch (cause) {
-      setChapterError(cause)
+      setChapterError(cause, "open")
     } finally {
       if (mounted.current) busy.setValue(false)
     }
   }
 
   function maybeAppend() {
+    if (!mounted.current || target.current) return
     const tail = pages.value[pages.value.length - 1]
-    if (tail && reachedEnd.current === tail.id && !error.value && cache.images.has(tail.url)) {
+    if (!tail || reachedEnd.current !== tail.id || (error.value && errorKind.current === "append")) return
+    if (tail.url && !cache.images.has(tail.url) && !requests.failed.has(tail.url)) return
+    if (getAdjacent(tail.chapter, 1)) {
+      if (directoryGap.value !== null) directoryGap.setValue(null)
       void appendChapter()
+    } else {
+      const page = getMissingPage(tail.chapter) ?? null
+      if (page !== directoryGap.value) directoryGap.setValue(page)
     }
   }
 
@@ -298,10 +353,32 @@ export function ChapterReader({ book, chapter, initialPage, opening, cache, getC
       pages.setValue([...items, ...makePages(data)])
       prioritize(visible.current)
     } catch (cause) {
-      setChapterError(cause)
+      setChapterError(cause, "append")
     } finally {
       if (mounted.current) busy.setValue(false)
     }
+  }
+
+  async function retryDirectory() {
+    const page = directoryGap.value
+    if (page === null || directoryRequest.current) return
+    const controller = new AbortController()
+    directoryRequest.current = controller
+    directoryError.setValue("")
+    try {
+      await reloadDirectoryPage(page, controller.signal)
+      if (!controller.signal.aborted) maybeAppend()
+    } catch {
+      if (!controller.signal.aborted) directoryError.setValue("下一话目录加载失败。")
+    } finally {
+      if (directoryRequest.current === controller) directoryRequest.current = null
+    }
+  }
+
+  function stopRequests() {
+    clearTimeout(prefetchTimer.current)
+    directoryRequest.current?.abort()
+    requests.close()
   }
 
   function choose(next: Chapter) {
@@ -318,7 +395,7 @@ export function ChapterReader({ book, chapter, initialPage, opening, cache, getC
     controls.setValue(false)
     let choice: Chapter | undefined
     try {
-      await Navigation.present({ element: <ReaderDirectory chapters={getChapters()} select={item => { choice = item }} /> })
+      await Navigation.present({ element: <ReaderDirectory chapters={getChapters()} chapterID={selected.value.id} select={item => { choice = item }} /> })
       if (choice && mounted.current) choose(choice)
     } catch {
       if (mounted.current) {
@@ -345,7 +422,7 @@ export function ChapterReader({ book, chapter, initialPage, opening, cache, getC
       mounted.current = false
       clearTimeout(hideTimer.current)
       save()
-      requests.close()
+      stopRequests()
     }
   }, [])
 
@@ -379,7 +456,11 @@ export function ChapterReader({ book, chapter, initialPage, opening, cache, getC
                   maybeAppend()
                 },
               }}
-              onScrollPhaseChange={(previous, _next, { geometry }) => {
+              onScrollPhaseChange={(previous, nextPhase, { geometry }) => {
+                if (nextPhase === "interacting" && target.current) {
+                  target.current = null
+                  reportVisible(visible.current)
+                }
                 if (previous !== "interacting" && previous !== "decelerating") return
                 if (!tail || target.current || pages.value[pages.value.length - 1]?.id !== tail.id || !visible.current.includes(tail.id)) return
                 const bottom = Math.max(-geometry.contentInsets.top,
@@ -390,10 +471,11 @@ export function ChapterReader({ book, chapter, initialPage, opening, cache, getC
               }}
             >
               <LazyVStack spacing={0} scrollTargetLayout>
-                {items.map(page => (
+                {items.map((page, index) => (
                   <VStack key={page.id} spacing={0}>
                     <ReaderImageRow page={page} cache={cache} requests={requests} width={geometry.size.width}
-                      placeholderHeight={geometry.size.height} showControls={showControls} />
+                      placeholderHeight={geometry.size.height} previousURL={items[index - 1]?.url}
+                      nextURL={items[index + 1]?.url} showControls={showControls} />
                   </VStack>
                 ))}
                 {endMarker !== null ? <Rectangle key={endMarker} fill="black" frame={{ height: 1 }} accessibilityHidden /> : null}
@@ -413,7 +495,13 @@ export function ChapterReader({ book, chapter, initialPage, opening, cache, getC
           <Text>{error.value}</Text>
           {needsToken.value ? <Button title="设置阅读 token" action={enterReadingToken} />
             : <Button title="重试章节" action={() => retry.current?.()} />}
-          {!items.length ? <Button title="返回" action={close} /> : null}
+          {!items.length ? <Button title="返回" action={close} /> :
+            <Button title="关闭提示" action={() => { error.setValue(""); needsToken.setValue(false); maybeAppend() }} />}
+        </VStack>
+      ) : directoryGap.value !== null ? (
+        <VStack spacing={8} padding={14} background="secondarySystemBackground">
+          <Text>{directoryError.value || "下一话目录尚未加载。"}</Text>
+          <Button title="加载下一话目录" action={retryDirectory} />
         </VStack>
       ) : null}
       {controls.value ? (

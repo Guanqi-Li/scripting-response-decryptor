@@ -1,4 +1,4 @@
-# 爱漫画 · 1.6.17
+# 爱漫画 · 1.7.0
 
 Scripting 仓库导入地址：https://github.com/Guanqi-Li/scripting-response-decryptor
 
@@ -6,7 +6,7 @@ Scripting 仓库导入地址：https://github.com/Guanqi-Li/scripting-response-d
 
 - 全屏打开后先加载分类，按接口返回的顺序显示。自动选中第一项并使用它的 ID 请求第 1 页，切换分类时使用对应的 ID。
 - 每页请求 15 本漫画。三列显示封面、标题和作者，保留每本漫画的 `bookID`。
-- 点击封面、标题或作者打开详情，按漫画 ID 加载最近更新时间和最新章节。详情缺少更新时间或章节时，使用列表里对应的数据。返回继续浏览原列表。
+- 点击封面、标题或作者打开详情，按漫画 ID 加载最近更新时间和最新章节。更新时间优先采用作品更新时间，最新话数优先采用完整目录中的最后一话。返回继续浏览原列表。切换分类后再切回时恢复该分类的滚动位置。
 - 详情与章节目录同时请求。目录按接口返回的总页数自动加载、按页码合并，保留对应的章节 ID。目录重试仅请求缺失页。
 - 点击章节或详情的阅读按钮进入全屏阅读，轻点画面可返回、切章或打开目录。滑过末页会追加下一章。
 - 默认 token 仅用于 `/api/chaptersDetails`。章节请求返回 401 时可在阅读器替换 token 并重试，替换值仅在本次运行中生效。
@@ -32,6 +32,8 @@ decrypt.ts 导出 decryptResponse(response)，支持完整响应或内层 payloa
 
 使用 Scripting 原生 UI、fetch、AbortController，以及内置 node:crypto / node:buffer，无需 npm 依赖。请使用支持这些 API 的当前 Scripting 版本。
 
-本地解密已用独立 .NET AES 密文交叉验证。签名与 Python hashlib 交叉验证，检查 URL 与查询参数解析及取消行为。真实请求 /api/banners 返回 HTTP 200、接口 code 422，提示缺少 type 参数；返回的加密 data 已成功解密为 {}。脚本将此类接口错误显示为失败，不误报业务成功。请自行输入带所需参数的完整接口网址。未进行 Scripting 真机验证。
+### 本地回归检查
+
+在 Node.js 22 或更新版本运行 `npm ci` 和 `npm test`。测试使用模拟请求和原生 UI，覆盖目录、预加载、续读、接章和历史保存。实际滚动与内存表现需要在 iPhone 上确认。
 
 官方文档：[Quick Start](https://scriptingapp.github.io/guide/Quick%20Start)、[fetch 与超时](https://scriptingapp.github.io/guide/Utilities/Request/fetch)、[Node API 兼容说明](https://scriptingapp.github.io/guide/Changelog/3.2.2/Node%20API%20Compatibility%20Guide)。

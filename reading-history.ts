@@ -23,20 +23,22 @@ function isReadingRecord(value: unknown): value is ReadingRecord {
     && typeof readAt === "number" && Number.isFinite(readAt)
 }
 
+function readRecords(): ReadingRecord[] {
+  const value = Storage.get<unknown>(HISTORY_KEY)
+  if (value === null) return []
+  if (!Array.isArray(value)) throw new Error("本地阅读记录格式有误。")
+  return value.filter(isReadingRecord)
+}
+
 export function getReadingHistory(): ReadingRecord[] {
-  try {
-    const value = Storage.get<unknown>(HISTORY_KEY)
-    return Array.isArray(value) ? value.filter(isReadingRecord).sort((a, b) => b.readAt - a.readAt) : []
-  } catch (error) {
-    console.warn("无法读取本地阅读记录", error)
-    return []
-  }
+  return readRecords().sort((a, b) => b.readAt - a.readAt)
 }
 
 export function saveReadingRecord(record: ReadingRecord) {
-  const records = getReadingHistory().filter(item => item.book.bookID !== record.book.bookID)
-  const serialized = JSON.parse(JSON.stringify([record, ...records])) as ReadingRecord[]
-  if (!Storage.set(HISTORY_KEY, serialized)) throw new Error("无法保存阅读记录。")
+  const records = readRecords().filter(item => item.book.bookID !== record.book.bookID)
+  const { book, chapter, page, pageCount, readAt } = record
+  const storedChapter = chapter.number === undefined ? { id: chapter.id, title: chapter.title } : chapter
+  if (!Storage.set(HISTORY_KEY, [{ book, chapter: storedChapter, page, pageCount, readAt }, ...records])) throw new Error("无法保存阅读记录。")
 }
 
 export function chapterLabel(chapter: Chapter): string {

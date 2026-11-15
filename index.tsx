@@ -20,6 +20,8 @@ function MainView() {
   const [selectedBook, setSelectedBook] = useState<Comic | null>(null)
   const [showHistory, setShowHistory] = useState(false)
   const [history, setHistory] = useState<ReadingRecord[]>([])
+  const [historyError, setHistoryError] = useState("")
+  const categoryPositions = useRef(new Map<number, string>())
   const readerCacheRef = useRef<ReaderCache | null>(null)
   const readerCache = readerCacheRef.current ?? (readerCacheRef.current = new ReaderCache())
   const details = useRef(new Map<number, Comic>())
@@ -39,7 +41,12 @@ function MainView() {
   }, [])
 
   function refreshHistory() {
-    setHistory(getReadingHistory())
+    try {
+      setHistory(getReadingHistory())
+      setHistoryError("")
+    } catch {
+      setHistoryError("无法读取观看历史。")
+    }
   }
 
   function cancelRequests() {
@@ -195,6 +202,8 @@ function MainView() {
           {selectedCategoryID !== null ? (
             <ComicGrid
               key={selectedCategoryID}
+              initialPosition={categoryPositions.current.get(selectedCategoryID) ?? null}
+              savePosition={id => categoryPositions.current.set(selectedCategoryID, id)}
               entry={entries[selectedCategoryID]}
               covers={covers}
               openBook={setSelectedBook}
@@ -202,7 +211,7 @@ function MainView() {
             />
           ) : null}
         </VStack>
-        {showHistory ? <ReadingHistoryView records={history} covers={covers} openBook={setSelectedBook} /> : null}
+        {showHistory ? <ReadingHistoryView records={history} error={historyError} retry={refreshHistory} covers={covers} openBook={setSelectedBook} /> : null}
       </ZStack>
     </VStack>
   </NavigationStack>
