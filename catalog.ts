@@ -6,6 +6,11 @@ const PAGE_SIZE = 15
 export type Category = { id: number; name: string }
 export type Comic = { bookID: number; title: string; author: string; coverURL: string }
 export type Catalog = { page: number; totalPage: number; books: Comic[] }
+export type ComicDetails = Comic & {
+  description: string
+  updatedAt: string
+  latestChapter: number | null
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null
@@ -63,6 +68,28 @@ export async function fetchCatalog(categoryID: number, page: number, signal: Abo
     throw new Error("解密后的漫画列表格式有误。")
   }
   return { page, totalPage: value.totalPage, books: value.list.map(parseComic) }
+}
+
+export async function fetchBookDetails(book: Comic, signal: AbortSignal): Promise<ComicDetails> {
+  const url = new URL("/api/bookDetails", SITE_ORIGIN)
+  url.searchParams.set("book_id", String(book.bookID))
+  const { value } = await requestAndDecrypt(url.href, "", signal)
+  if (!isRecord(value) || !isRecord(value.bookDetail) || value.bookDetail.id !== book.bookID) {
+    throw new Error("解密后的漫画详情格式有误。")
+  }
+
+  const detail = value.bookDetail
+  const lastChapter = isRecord(detail.last_chapter_obj) ? detail.last_chapter_obj : null
+  const chapter = isRecord(lastChapter?.chapter_obj) ? lastChapter.chapter_obj : null
+  return {
+    bookID: book.bookID,
+    title: typeof detail.title === "string" && detail.title.trim() ? detail.title : book.title,
+    author: typeof detail.author === "string" && detail.author.trim() ? detail.author : book.author,
+    coverURL: coverURL(detail.image) || book.coverURL,
+    description: typeof detail.desc === "string" ? detail.desc.trim() : "",
+    updatedAt: typeof lastChapter?.updated_at === "string" ? lastChapter.updated_at.trim() : "",
+    latestChapter: isID(chapter?.sumChapters) ? chapter.sumChapters : null,
+  }
 }
 
 export function appendCatalog(previous: Catalog | undefined, next: Catalog): Catalog {
