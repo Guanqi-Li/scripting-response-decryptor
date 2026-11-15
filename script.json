@@ -1,9 +1,9 @@
 {
   "name": "响应解密",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "entry": "index.tsx",
   "icon": "lock.open",
   "color": "#007AFF",
-  "description": "从剪贴板读取响应 JSON，使用 AES-256-CBC 和 PKCS#7 解密。",
+  "description": "手动输入接口网址，发送带 timestamp 和 sign 的 GET 请求并解密响应 JSON。",
   "runInApp": true
 }
