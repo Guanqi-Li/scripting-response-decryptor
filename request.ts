@@ -30,7 +30,7 @@ export async function requestAndDecrypt(input: string, token: string, signal: Ab
   try {
     response = await fetch(target.url, {
       method: "GET",
-      headers: makeHeaders(target.apiPath, "GET", token),
+      headers: { ...makeHeaders(target.apiPath, "GET", token), "Cache-Control": "no-cache, no-store" },
       timeout: 15,
       signal,
       // 换路径后的签名会失效，不携带 token 自动跳转。
