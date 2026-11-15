@@ -1,4 +1,4 @@
-import { Button, LazyVStack, ProgressView, Text, VStack, useEffect, useRef, useState } from "scripting"
+import { Button, Divider, LazyVStack, ProgressView, Text, VStack, useEffect, useRef, useState } from "scripting"
 import { fetchChapterPage, type Chapter } from "./catalog"
 
 type ChapterDirectory = { totalPage: number; pages: Map<number, Chapter[]> }
@@ -91,12 +91,14 @@ export function ChapterDirectoryView({ bookID, cache }: { bookID: number; cache:
       <Text font="headline">章节目录</Text>
       {chapters.length > 0 ? (
         <LazyVStack alignment="leading" spacing={0}>
-          {chapters.map(chapter => (
-            <Text
-              key={chapter.id}
-              padding={{ vertical: 10 }}
-              frame={{ maxWidth: "infinity", alignment: "leading" }}
-            >{chapter.title}</Text>
+          {chapters.map((chapter, index) => (
+            <VStack key={chapter.id} alignment="leading" spacing={0}>
+              <Text
+                padding={{ vertical: 10 }}
+                frame={{ maxWidth: "infinity", minHeight: 52, alignment: "leading" }}
+              >{chapter.title}</Text>
+              {index < chapters.length - 1 ? <Divider /> : null}
+            </VStack>
           ))}
         </LazyVStack>
       ) : null}
