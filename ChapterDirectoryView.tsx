@@ -36,6 +36,28 @@ export function getAdjacentChapter(
   return currentPage !== undefined && nextPage !== undefined && Math.abs(currentPage - nextPage) <= 1 ? next : undefined
 }
 
+export function ChapterDirectoryRows({ chapters, openChapter }: {
+  chapters: Chapter[]
+  openChapter: (chapter: Chapter) => void
+}) {
+  return (
+    <LazyVStack alignment="leading" spacing={0}>
+      {chapters.map((chapter, index) => (
+        <VStack key={chapter.id} alignment="leading" spacing={0}>
+          <Button buttonStyle="plain" action={() => openChapter(chapter)}>
+            <Text
+              padding={{ vertical: 10 }}
+              frame={{ maxWidth: "infinity", minHeight: 52, alignment: "leading" }}
+              contentShape="rect"
+            >{chapter.title}</Text>
+          </Button>
+          {index < chapters.length - 1 ? <Divider /> : null}
+        </VStack>
+      ))}
+    </LazyVStack>
+  )
+}
+
 export function ChapterDirectoryView({ bookID, cache, openChapter, onFirstChapter }: {
   bookID: number
   cache: ChapterDirectoryCache
@@ -115,20 +137,7 @@ export function ChapterDirectoryView({ bookID, cache, openChapter, onFirstChapte
     <VStack alignment="leading" spacing={10} frame={{ maxWidth: "infinity", alignment: "leading" }}>
       <Text font="headline">章节目录</Text>
       {chapters.length > 0 ? (
-        <LazyVStack alignment="leading" spacing={0}>
-          {chapters.map((chapter, index) => (
-            <VStack key={chapter.id} alignment="leading" spacing={0}>
-              <Button buttonStyle="plain" action={() => openChapter(chapter)}>
-                <Text
-                  padding={{ vertical: 10 }}
-                  frame={{ maxWidth: "infinity", minHeight: 52, alignment: "leading" }}
-                  contentShape="rect"
-                >{chapter.title}</Text>
-              </Button>
-              {index < chapters.length - 1 ? <Divider /> : null}
-            </VStack>
-          ))}
-        </LazyVStack>
+        <ChapterDirectoryRows chapters={chapters} openChapter={openChapter} />
       ) : null}
       {loading ? <ProgressView /> : null}
       {error ? (
