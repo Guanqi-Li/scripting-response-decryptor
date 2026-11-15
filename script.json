@@ -1,9 +1,9 @@
 {
   "name": "响应解密",
-  "version": "1.1.2",
+  "version": "1.2.0",
   "entry": "index.tsx",
   "icon": "lock.open",
   "color": "#007AFF",
-  "description": "手动输入接口网址，发送带 timestamp 和 sign 的 GET 请求并解密响应 JSON。",
+  "description": "启动时加载并解密分类，支持横向选择分类及手动 GET 请求。",
   "runInApp": true
 }
