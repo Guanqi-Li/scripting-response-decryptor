@@ -1,8 +1,8 @@
 {
   "name": "爱漫画",
-  "version": "1.6.11",
+  "version": "1.6.12",
   "entry": "index.tsx",
-  "icon": "lock.open",
+  "icon": "book.fill",
   "color": "#007AFF",
   "description": "全屏阅读漫画，支持本机续读进度和观看历史。",
   "runInApp": true
