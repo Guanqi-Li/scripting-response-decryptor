@@ -107,7 +107,7 @@ function MainView() {
     <VStack
       padding={{ top: 16 }}
       spacing={0}
-      navigationTitle={showHistory ? "观看历史" : "GET 响应解密"}
+      navigationTitle={showHistory ? "观看历史" : "爱漫画"}
       overlay={selectedBook === null ? {
         alignment: "bottomTrailing",
         content: (
