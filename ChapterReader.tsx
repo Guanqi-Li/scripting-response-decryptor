@@ -310,18 +310,15 @@ export function ChapterReader({ book, chapter, initialPage, cache, getChapters, 
                   const loaded = cache.images.get(page.url)
                   const width = geometry.size.width
                   const ratio = loaded?.ratio ?? cache.ratios.get(page.url)
-                  // Keep narrow image borders outside the viewport without stretching the art.
-                  const imageWidth = width + 4
-                  const height = ratio ? imageWidth * ratio : geometry.size.height
+                  const height = ratio ? width * ratio : geometry.size.height
                   return (
                     <VStack key={page.id} spacing={0}>
                       <ZStack
                         frame={{ width, height }}
-                        clipped
                         contentShape="rect"
                         onTapGesture={showControls}
-                        overlay={loaded ? <Image image={loaded.image} resizable scaleToFill
-                          frame={{ width: imageWidth, height }} /> : undefined}
+                        overlay={loaded ? <Image image={loaded.image} resizable
+                          frame={{ width, height }} /> : undefined}
                       >
                         {!loaded ? requests.failed.has(page.url)
                           ? <Button title={`重试第 ${page.number} 张`} action={() => requests.retry(page.url)} />
@@ -335,17 +332,11 @@ export function ChapterReader({ book, chapter, initialPage, cache, getChapters, 
           )}
         </GeometryReader>
       ) : !error.value ? (
-        <ZStack frame={{ maxWidth: "infinity", maxHeight: "infinity" }}>
-          <VStack spacing={10} accessibilityLabel="正在加载章节">
-            <ProgressView tint="white" />
-            <Text foregroundStyle="white">正在加载章节…</Text>
-          </VStack>
-          <VStack alignment="leading" padding={16}
-            frame={{ maxWidth: "infinity", maxHeight: "infinity", alignment: "topLeading" }}>
-            <Button title="返回" systemImage="chevron.left" tint="white" action={close} />
-            <Spacer />
-          </VStack>
-        </ZStack>
+        <VStack alignment="leading" padding={16}
+          frame={{ maxWidth: "infinity", maxHeight: "infinity", alignment: "topLeading" }}>
+          <Button title="返回" systemImage="chevron.left" tint="white" action={close} />
+          <Spacer />
+        </VStack>
       ) : null}
       {error.value ? (
         <VStack spacing={8} padding={14} background="secondarySystemBackground">
