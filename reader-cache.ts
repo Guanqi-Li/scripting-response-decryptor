@@ -23,11 +23,16 @@ export class ReaderCache {
     }
   }
 
-  trim(protectedURLs: ReadonlySet<string>) {
+  trim(protectedURLs: ReadonlySet<string>): string[] {
+    const evicted: string[] = []
     for (const url of this.images.keys()) {
       if (this.images.size <= 18) break
-      if (!protectedURLs.has(url)) this.images.delete(url)
+      if (!protectedURLs.has(url)) {
+        this.images.delete(url)
+        evicted.push(url)
+      }
     }
+    return evicted
   }
 }
 
@@ -37,7 +42,8 @@ export class ReaderRequests {
   private readonly downloads = new Map<string, Download>()
   private readonly lifetime = new AbortController()
   private wanted: string[] = []
-  changed: () => void = () => {}
+  private readonly observers = new Map<string, Set<() => void>>()
+  changed: (url: string) => void = () => {}
 
   constructor(private readonly cache: ReaderCache, private readonly bookID: number) {}
 
@@ -58,27 +64,40 @@ export class ReaderRequests {
     return request
   }
 
-  prioritize(urls: string[]) {
-    this.wanted = [...new Set(urls)]
-    const wanted = new Set(this.wanted)
-    for (const url of wanted) this.cache.touch(url)
-    this.cache.trim(wanted)
-    for (const download of this.downloads.values()) {
-      if (!wanted.has(download.url)) download.controller.abort()
+  observe(url: string, update: () => void): () => void {
+    const listeners = this.observers.get(url) ?? new Set<() => void>()
+    this.observers.set(url, listeners)
+    listeners.add(update)
+    return () => {
+      listeners.delete(update)
+      if (listeners.size === 0) this.observers.delete(url)
     }
+  }
+
+  private notify(url: string) {
+    this.observers.get(url)?.forEach(update => update())
+  }
+
+  prioritize(urls: string[]) {
+    const next = [...new Set(urls)]
+    if (next.length === this.wanted.length && next.every((url, index) => url === this.wanted[index])) return
+    this.wanted = next
+    for (const url of next) this.cache.touch(url)
     this.pump()
   }
 
   retry(url: string) {
     this.failed.delete(url)
     this.prioritize([url, ...this.wanted])
-    this.changed()
+    this.pump()
+    this.notify(url)
   }
 
   close() {
     this.lifetime.abort()
     for (const download of this.downloads.values()) download.controller.abort()
     this.wanted = []
+    this.observers.clear()
   }
 
   private pump() {
@@ -111,12 +130,15 @@ export class ReaderRequests {
         ? image.croppedTo?.({ x: inset, y: 0, width: image.width - inset * 2, height: image.height })
         : null
       this.cache.store(url, cropped ?? image)
-      this.cache.trim(new Set(this.wanted))
+      for (const evicted of this.cache.trim(new Set(this.wanted))) this.notify(evicted)
     } catch {
       if (!signal.aborted) this.failed.add(url)
     } finally {
       this.downloads.delete(url)
-      if (!this.lifetime.signal.aborted && !signal.aborted) this.changed()
+      if (!this.lifetime.signal.aborted && !signal.aborted) {
+        this.notify(url)
+        this.changed(url)
+      }
       this.pump()
     }
   }
