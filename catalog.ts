@@ -13,6 +13,8 @@ export type Comic = {
   latestChapter: number | null
 }
 export type Catalog = { page: number; totalPage: number; books: Comic[] }
+export type Chapter = { id: number; title: string }
+export type ChapterPage = { totalPage: number; chapters: Chapter[] }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null
@@ -103,6 +105,26 @@ export async function fetchBookDetails(book: Comic, signal: AbortSignal): Promis
     updatedAt: textValue(lastChapter?.updated_at) || textValue(detail.renew_time) || book.updatedAt,
     latestChapter: chapterNumber(chapter?.sumChapters) ?? book.latestChapter,
   }
+}
+
+export async function fetchChapterPage(bookID: number, page: number, signal: AbortSignal): Promise<ChapterPage> {
+  const url = new URL("/api/chaptersDirectories", SITE_ORIGIN)
+  url.searchParams.set("sort", "0")
+  url.searchParams.set("page", String(page))
+  url.searchParams.set("size", String(PAGE_SIZE))
+  url.searchParams.set("book_id", String(bookID))
+  const { value } = await requestAndDecrypt(url.href, "", signal)
+  if (!isRecord(value) || value.page !== page || !isID(value.totalPage) || !Array.isArray(value.list)) {
+    throw new Error("解密后的章节目录格式有误。")
+  }
+  const chapters = value.list.map((chapter: unknown): Chapter => {
+    if (!isRecord(chapter) || !isID(chapter.id) || typeof chapter.title !== "string"
+      || (chapter.book_id !== undefined && chapter.book_id !== bookID)) {
+      throw new Error("章节资料格式有误。")
+    }
+    return { id: chapter.id, title: chapter.title }
+  })
+  return { totalPage: value.totalPage, chapters }
 }
 
 export function appendCatalog(previous: Catalog | undefined, next: Catalog): Catalog {
