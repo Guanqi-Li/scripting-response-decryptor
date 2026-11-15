@@ -6,7 +6,7 @@ import { ComicGrid, CoverCache, type CatalogEntry } from "./ComicGrid"
 import { ComicDetailView } from "./ComicDetailView"
 import {
   appendCatalog, clearLegacyCatalogCache, fetchCatalog, fetchCategories,
-  type Category, type Comic, type ComicDetails,
+  type Category, type Comic,
 } from "./catalog"
 
 function MainView() {
@@ -14,7 +14,7 @@ function MainView() {
   const [selectedCategoryID, setSelectedCategoryID] = useState<number | null>(null)
   const [categoryError, setCategoryError] = useState("")
   const [selectedBook, setSelectedBook] = useState<Comic | null>(null)
-  const details = useRef(new Map<number, ComicDetails>())
+  const details = useRef(new Map<number, Comic>())
   const [entries, setEntries] = useState<Record<number, CatalogEntry>>({})
   const current = useRef(entries)
   const categoryRequest = useRef<AbortController | null>(null)
