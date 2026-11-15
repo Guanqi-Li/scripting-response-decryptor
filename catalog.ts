@@ -129,7 +129,7 @@ export async function fetchChapterPage(bookID: number, page: number, signal: Abo
 
 export type ReaderChapter = { chapter: Chapter; images: string[] }
 
-let readerToken = ""
+let readerToken = "61086ae98bcc6792bac0defcdd8ce258_263842636"
 
 export function setReaderToken(token: string) {
   readerToken = token
