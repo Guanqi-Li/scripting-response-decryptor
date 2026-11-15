@@ -1,6 +1,6 @@
 import {
   Button, Dialog, HStack, Image, Navigation, NavigationStack, ProgressView,
-  RoundedRectangle, Script, ScrollView, Text, TextField, VStack, useEffect, useRef, useState,
+  RoundedRectangle, Script, ScrollView, Spacer, Text, VStack, useEffect, useRef, useState,
 } from "scripting"
 import { requestAndDecrypt } from "./request"
 
@@ -22,12 +22,6 @@ function MainView() {
   const [selectedCategoryID, setSelectedCategoryID] = useState<number | null>(null)
   const [categoryError, setCategoryError] = useState("")
   const categoryRequest = useRef<AbortController | null>(null)
-  const [url, setURL] = useState("")
-  const [token, setToken] = useState("")
-  const [result, setResult] = useState("")
-  const [status, setStatus] = useState("")
-  const [busy, setBusy] = useState(false)
-  const active = useRef<AbortController | null>(null)
   const mounted = useRef(true)
 
   useEffect(() => {
@@ -37,7 +31,6 @@ function MainView() {
       mounted.current = false
       categoryRequest.current?.abort()
       categoryRequest.current = null
-      active.current?.abort()
     }
   }, [])
 
@@ -64,47 +57,15 @@ function MainView() {
     }
   }
 
-  async function enterToken() {
-    const value = await Dialog.prompt({ title: "可选 token", message: "无需登录的接口可留空。仅保存在本次运行内存中。", defaultValue: token, obscureText: true, confirmLabel: "保存", cancelLabel: "取消" })
-    if (value !== null) setToken(value.trim())
-  }
-
-  async function request() {
-    if (active.current) return
-    const requestURL = url.trim()
-    if (!requestURL) {
-      setStatus("请先输入接口完整网址。")
-      return
-    }
-    const controller = new AbortController()
-    active.current = controller
-    setBusy(true)
-    setStatus("正在发送 GET 请求并解密…")
-    try {
-      const response = await requestAndDecrypt(requestURL, token, controller.signal)
-      if (!mounted.current || active.current !== controller) return
-      setResult(JSON.stringify(response.value, null, 2))
-      setStatus(`HTTP ${response.status} · 解密成功 · ${new Date().toLocaleTimeString()}`)
-    } catch (error) {
-      if (mounted.current && active.current === controller) setStatus(error instanceof Error ? error.message : String(error))
-    } finally {
-      if (active.current === controller) {
-        active.current = null
-        if (mounted.current) setBusy(false)
-      }
-    }
-  }
-
   function exit() {
     categoryRequest.current?.abort()
-    active.current?.abort()
     Script.exit()
   }
 
   return <NavigationStack>
     <VStack
-      padding
-      spacing={12}
+      padding={{ top: 16 }}
+      spacing={0}
       navigationTitle="GET 响应解密"
       navigationBarTitleDisplayMode="inline"
       toolbar={{
@@ -119,7 +80,7 @@ function MainView() {
       }}
     >
       {categoryError ? (
-        <VStack spacing={6}>
+        <VStack spacing={6} padding={{ horizontal: 16 }}>
           <Text>分类加载失败。{categoryError}</Text>
           <Button title="重新加载分类" action={loadCategories} />
         </VStack>
@@ -129,7 +90,7 @@ function MainView() {
         <Text>暂无分类</Text>
       ) : (
         <ScrollView axes="horizontal" scrollIndicator="hidden">
-          <HStack spacing={28}>
+          <HStack spacing={28} padding={{ horizontal: 16 }}>
             {categories.map(category => {
               const selected = category.id === selectedCategoryID
               return (
@@ -139,16 +100,22 @@ function MainView() {
                   accessibilityAddTraits={selected ? "isSelected" : undefined}
                   action={() => setSelectedCategoryID(category.id)}
                 >
-                  <VStack spacing={6} frame={{ minHeight: 44 }}>
-                    <Text font="body" fontWeight={selected ? "semibold" : "regular"} lineLimit={1}>
+                  <VStack
+                    frame={{ minHeight: 44 }}
+                    overlay={selected ? {
+                      alignment: "bottom",
+                      content: <RoundedRectangle cornerRadius={1.5} fill="label" frame={{ height: 2 }} />,
+                    } : undefined}
+                  >
+                    <Text
+                      font="body"
+                      fontWeight={selected ? "semibold" : "regular"}
+                      lineLimit={1}
+                      fixedSize={{ horizontal: true, vertical: false }}
+                      padding={{ bottom: 6 }}
+                    >
                       {category.name}
                     </Text>
-                    <RoundedRectangle
-                      cornerRadius={1.5}
-                      fill="label"
-                      frame={{ height: 2 }}
-                      opacity={selected ? 1 : 0}
-                    />
                   </VStack>
                 </Button>
               )
@@ -156,25 +123,7 @@ function MainView() {
           </HStack>
         </ScrollView>
       )}
-      <VStack alignment="leading" spacing={6}>
-        <Text>接口网址</Text>
-        <TextField
-          title="接口网址"
-          prompt="https://…/api/…"
-          value={url}
-          onChanged={setURL}
-          textFieldStyle="roundedBorder"
-          keyboardType="URL"
-          textInputAutocapitalization="never"
-          autocorrectionDisabled
-          disabled={busy}
-        />
-      </VStack>
-      <Button title={token ? "修改 token（已设置）" : "设置 token（可选）"} action={enterToken} disabled={busy} />
-      <Button title={busy ? "请求中…" : "GET 请求并解密"} action={request} disabled={busy} />
-      {busy ? <Button title="取消请求" action={() => active.current?.abort()} /> : null}
-      {status ? <Text>{status}</Text> : null}
-      <ScrollView><Text textSelection="enabled">{result || "解密结果显示在这里"}</Text></ScrollView>
+      <Spacer />
     </VStack>
   </NavigationStack>
 }
