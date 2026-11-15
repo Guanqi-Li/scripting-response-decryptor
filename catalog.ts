@@ -129,10 +129,16 @@ export async function fetchChapterPage(bookID: number, page: number, signal: Abo
 
 export type ReaderChapter = { chapter: Chapter; images: string[] }
 
+let readerToken = ""
+
+export function setReaderToken(token: string) {
+  readerToken = token
+}
+
 export async function fetchReaderChapter(bookID: number, chapter: Chapter, signal: AbortSignal): Promise<ReaderChapter> {
   const url = new URL("/api/chaptersDetails", SITE_ORIGIN)
   url.searchParams.set("chapter_id", String(chapter.id))
-  const { value } = await requestAndDecrypt(url.href, "", signal)
+  const { value } = await requestAndDecrypt(url.href, readerToken, signal)
   if (!isRecord(value) || !isRecord(value.chapterDetail)) throw new Error("章节详情格式有误。")
   const detail = value.chapterDetail
   if (detail.id !== chapter.id || detail.book_id !== bookID || !Array.isArray(detail.image_list)) {
