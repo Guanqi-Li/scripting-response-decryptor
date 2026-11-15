@@ -3,12 +3,18 @@ import {
   Script, ScrollView, Text, VStack, useEffect, useRef, useState,
 } from "scripting"
 import { ComicGrid, CoverCache, type CatalogEntry } from "./ComicGrid"
-import { appendCatalog, clearLegacyCatalogCache, fetchCatalog, fetchCategories, type Category } from "./catalog"
+import { ComicDetailView } from "./ComicDetailView"
+import {
+  appendCatalog, clearLegacyCatalogCache, fetchCatalog, fetchCategories,
+  type Category, type Comic, type ComicDetails,
+} from "./catalog"
 
 function MainView() {
   const [categories, setCategories] = useState<Category[] | null>(null)
   const [selectedCategoryID, setSelectedCategoryID] = useState<number | null>(null)
   const [categoryError, setCategoryError] = useState("")
+  const [selectedBook, setSelectedBook] = useState<Comic | null>(null)
+  const details = useRef(new Map<number, ComicDetails>())
   const [entries, setEntries] = useState<Record<number, CatalogEntry>>({})
   const current = useRef(entries)
   const categoryRequest = useRef<AbortController | null>(null)
@@ -89,6 +95,13 @@ function MainView() {
       spacing={0}
       navigationTitle="GET 响应解密"
       navigationBarTitleDisplayMode="inline"
+      navigationDestination={{
+        isPresented: selectedBook !== null,
+        onChanged: presented => { if (!presented) setSelectedBook(null) },
+        content: selectedBook ? (
+          <ComicDetailView key={selectedBook.bookID} book={selectedBook} covers={covers} cache={details.current} />
+        ) : <VStack />,
+      }}
       toolbar={{
         topBarLeading: <Button accessibilityLabel="退出" action={exit}>
           <Image systemName="xmark" />
@@ -144,6 +157,7 @@ function MainView() {
           key={selectedCategoryID}
           entry={entries[selectedCategoryID]}
           covers={covers}
+          openBook={setSelectedBook}
           loadPage={() => { void loadPage(selectedCategoryID) }}
         />
       ) : null}
