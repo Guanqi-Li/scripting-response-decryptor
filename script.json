@@ -1,9 +1,9 @@
 {
   "name": "响应解密",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "entry": "index.tsx",
   "icon": "lock.open",
   "color": "#007AFF",
-  "description": "启动时加载并解密分类，支持横向选择分类及手动 GET 请求。",
+  "description": "启动时自动加载并解密分类，支持横向滚动和选择。",
   "runInApp": true
 }
