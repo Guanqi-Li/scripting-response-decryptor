@@ -2,20 +2,22 @@ import {
   Button, Dialog, HStack, Image, Navigation, NavigationStack, RoundedRectangle,
   Script, ScrollView, Text, VStack, useEffect, useRef, useState,
 } from "scripting"
-import { ComicGrid, type CatalogEntry } from "./ComicGrid"
-import { appendCatalog, fetchCatalog, fetchCategories, NEW_CATEGORY, readCatalog, saveCatalog } from "./catalog"
+import { ComicGrid, CoverCache, type CatalogEntry } from "./ComicGrid"
+import { appendCatalog, clearLegacyCatalogCache, fetchCatalog, fetchCategories, type Category } from "./catalog"
 
 function MainView() {
-  const [categories, setCategories] = useState([NEW_CATEGORY])
-  const [selectedCategoryID, setSelectedCategoryID] = useState(NEW_CATEGORY.id)
+  const [categories, setCategories] = useState<Category[] | null>(null)
+  const [selectedCategoryID, setSelectedCategoryID] = useState<number | null>(null)
   const [categoryError, setCategoryError] = useState("")
   const [entries, setEntries] = useState<Record<number, CatalogEntry>>({})
   const current = useRef(entries)
   const categoryRequest = useRef<AbortController | null>(null)
   const pageRequests = useRef(new Map<number, AbortController>())
+  const coverCache = useRef<CoverCache | null>(null)
+  const covers = coverCache.current ?? (coverCache.current = new CoverCache())
 
   useEffect(() => {
-    ensureCatalog(NEW_CATEGORY.id)
+    clearLegacyCatalogCache()
     void loadCategories()
     return cancelRequests
   }, [])
@@ -25,6 +27,7 @@ function MainView() {
     categoryRequest.current = null
     for (const controller of pageRequests.current.values()) controller.abort()
     pageRequests.current.clear()
+    covers.clear()
   }
 
   async function loadCategories() {
@@ -34,7 +37,10 @@ function MainView() {
     setCategoryError("")
     try {
       const loaded = await fetchCategories(controller.signal)
-      if (!controller.signal.aborted) setCategories(loaded)
+      if (controller.signal.aborted) return
+      setCategories(loaded)
+      const first = loaded[0]
+      if (first) selectCategory(first.id)
     } catch (error) {
       if (!controller.signal.aborted) setCategoryError(errorMessage(error))
     } finally {
@@ -47,16 +53,9 @@ function MainView() {
     setEntries(current.current)
   }
 
-  function ensureCatalog(id: number) {
-    if (current.current[id]) return
-    const cached = readCatalog(id)
-    if (cached) updateCatalog(id, { data: cached })
-    else void loadPage(id)
-  }
-
   function selectCategory(id: number) {
     setSelectedCategoryID(id)
-    ensureCatalog(id)
+    if (!current.current[id]) void loadPage(id)
   }
 
   async function loadPage(id: number) {
@@ -72,7 +71,6 @@ function MainView() {
       if (controller.signal.aborted) return
       const combined = appendCatalog(data, next)
       updateCatalog(id, { data: combined })
-      saveCatalog(id, combined)
     } catch (error) {
       if (!controller.signal.aborted) updateCatalog(id, { data, error: errorMessage(error) })
     } finally {
@@ -102,7 +100,7 @@ function MainView() {
         ) : undefined,
       }}
     >
-      <ScrollView axes="horizontal" scrollIndicator="hidden" fixedSize={{ horizontal: false, vertical: true }}>
+      {categories?.length ? <ScrollView axes="horizontal" scrollIndicator="hidden" fixedSize={{ horizontal: false, vertical: true }}>
         <HStack spacing={28} padding={{ horizontal: 16 }}>
           {categories.map(category => {
             const selected = category.id === selectedCategoryID
@@ -134,18 +132,21 @@ function MainView() {
             )
           })}
         </HStack>
-      </ScrollView>
+      </ScrollView> : categories ? <Text>暂无分类</Text> : null}
       {categoryError ? (
         <VStack spacing={6} padding={{ horizontal: 16, vertical: 8 }}>
           <Text>分类加载失败。{categoryError}</Text>
           <Button title="重新加载分类" action={loadCategories} />
         </VStack>
       ) : null}
-      <ComicGrid
-        key={selectedCategoryID}
-        entry={entries[selectedCategoryID]}
-        loadPage={() => { void loadPage(selectedCategoryID) }}
-      />
+      {selectedCategoryID !== null ? (
+        <ComicGrid
+          key={selectedCategoryID}
+          entry={entries[selectedCategoryID]}
+          covers={covers}
+          loadPage={() => { void loadPage(selectedCategoryID) }}
+        />
+      ) : null}
     </VStack>
   </NavigationStack>
 }
