@@ -1,23 +1,76 @@
 import {
   Button, Image, LazyVGrid, ProgressView, RoundedRectangle, ScrollView, Text, VStack,
-  useRef, type GridItem, type ScrollGeometry,
+  useEffect, useRef, useState, type GridItem, type ScrollGeometry,
 } from "scripting"
 import type { Catalog, Comic } from "./catalog"
 
 export type CatalogEntry = { data?: Catalog; loading?: boolean; error?: string }
 
+export class CoverCache {
+  private readonly images = new Map<string, Promise<UIImage | null>>()
+  private controller: AbortController | null = null
+
+  load(url: string): Promise<UIImage | null> {
+    const cached = this.images.get(url)
+    if (cached) return cached
+
+    const controller = this.controller ?? (this.controller = new AbortController())
+    const pending = this.fetchCover(url, controller.signal).then(image => {
+      if (!image && this.images.get(url) === pending) this.images.delete(url)
+      return image
+    })
+    this.images.set(url, pending)
+    return pending
+  }
+
+  clear() {
+    this.controller?.abort()
+    this.controller = null
+    this.images.clear()
+  }
+
+  private async fetchCover(url: string, signal: AbortSignal): Promise<UIImage | null> {
+    try {
+      const response = await fetch(url, {
+        headers: { "Cache-Control": "no-cache, no-store" },
+        timeout: 15,
+        signal,
+      })
+      if (!response.ok || signal.aborted) return null
+      const data = await response.data()
+      if (signal.aborted) return null
+      const image = UIImage.fromData(data)
+      if (!image || (image.width <= 360 && image.height <= 540)) return image
+      return image.preparingThumbnail({ width: 360, height: 540 }) ?? image
+    } catch {
+      return null
+    }
+  }
+}
+
 const columns: GridItem[] = Array.from({ length: 3 }, () => ({
   size: { type: "flexible", min: 0 }, spacing: 10, alignment: "topLeading",
 }))
 
-function ComicCard({ book }: { book: Comic }) {
+function ComicCard({ book, covers }: { book: Comic; covers: CoverCache }) {
+  const [cover, setCover] = useState<UIImage | null>(null)
+
+  useEffect(() => {
+    if (!book.coverURL) return
+    let active = true
+    void covers.load(book.coverURL).then(image => {
+      if (active) setCover(image)
+    })
+    return () => { active = false }
+  }, [book.coverURL, covers])
+
   return (
     <VStack alignment="leading" spacing={4}>
       <RoundedRectangle
         cornerRadius={7}
         fill="secondarySystemBackground"
         aspectRatio={{ value: 2 / 3, contentMode: "fit" }}
-        overlay={book.coverURL ? <Image imageUrl={book.coverURL} resizable scaleToFill /> : undefined}
+        overlay={cover ? <Image image={cover} resizable scaleToFill /> : undefined}
         clipShape={{ type: "rect", cornerRadius: 7 }}
       />
       <Text font="subheadline" fontWeight="semibold" lineLimit={2}>{book.title}</Text>
@@ -32,7 +85,11 @@ function distanceFromBottom(geometry: ScrollGeometry): number {
   return bottom - geometry.contentOffset.y
 }
 
-export function ComicGrid({ entry, loadPage }: { entry?: CatalogEntry; loadPage: () => void }) {
+export function ComicGrid({ entry, covers, loadPage }: {
+  entry?: CatalogEntry
+  covers: CoverCache
+  loadPage: () => void
+}) {
   const drag = useRef({ startedAtBottom: false, interacting: false })
   const data = entry?.data
   const hasMore = data !== undefined && data.page < data.totalPage
@@ -60,7 +117,7 @@ export function ComicGrid({ entry, loadPage }: { entry?: CatalogEntry; loadPage:
       <VStack spacing={14} padding={{ horizontal: 16, top: 12, bottom: 16 }}>
         {data?.books.length ? (
           <LazyVGrid columns={columns} spacing={14}>
-            {data.books.map(book => <ComicCard key={book.bookID} book={book} />)}
+            {data.books.map(book => <ComicCard key={book.bookID} book={book} covers={covers} />)}
           </LazyVGrid>
         ) : data ? <Text>暂无漫画</Text> : null}
         {entry?.loading ? <ProgressView /> : null}
