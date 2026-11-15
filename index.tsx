@@ -4,6 +4,7 @@ import {
 } from "scripting"
 import { ComicGrid, CoverCache, type CatalogEntry } from "./ComicGrid"
 import { ComicDetailView } from "./ComicDetailView"
+import type { ChapterDirectoryCache } from "./ChapterDirectoryView"
 import {
   appendCatalog, clearLegacyCatalogCache, fetchCatalog, fetchCategories,
   type Category, type Comic,
@@ -15,6 +16,7 @@ function MainView() {
   const [categoryError, setCategoryError] = useState("")
   const [selectedBook, setSelectedBook] = useState<Comic | null>(null)
   const details = useRef(new Map<number, Comic>())
+  const directories = useRef<ChapterDirectoryCache>(new Map())
   const [entries, setEntries] = useState<Record<number, CatalogEntry>>({})
   const current = useRef(entries)
   const categoryRequest = useRef<AbortController | null>(null)
@@ -99,7 +101,13 @@ function MainView() {
         isPresented: selectedBook !== null,
         onChanged: presented => { if (!presented) setSelectedBook(null) },
         content: selectedBook ? (
-          <ComicDetailView key={selectedBook.bookID} book={selectedBook} covers={covers} cache={details.current} />
+          <ComicDetailView
+            key={selectedBook.bookID}
+            book={selectedBook}
+            covers={covers}
+            cache={details.current}
+            directories={directories.current}
+          />
         ) : <VStack />,
       }}
       toolbar={{
