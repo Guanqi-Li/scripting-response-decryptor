@@ -1,8 +1,9 @@
 import {
-  Button, Dialog, GeometryReader, HStack, Image, LazyVStack, List, Navigation, NavigationStack,
+  Button, Dialog, GeometryReader, HStack, Image, LazyVStack, Navigation, NavigationStack,
   ProgressView, Rectangle, ScrollView, Spacer, Text, VStack, ZStack, useEffect, useObservable, useRef,
 } from "scripting"
 import { setReaderToken, type Chapter, type Comic, type ReaderChapter } from "./catalog"
+import { ChapterDirectoryRows } from "./ChapterDirectoryView"
 import { ApiError } from "./request"
 import { ReaderRequests, type ReaderCache } from "./reader-cache"
 import { chapterLabel, saveReadingRecord, type ReadingRecord } from "./reading-history"
@@ -26,11 +27,15 @@ function ReaderDirectory({ chapters, select }: { chapters: Chapter[]; select: (c
   const dismiss = Navigation.useDismiss()
   return (
     <NavigationStack>
-      <List navigationTitle="目录" toolbar={{ cancellationAction: <Button title="关闭" action={() => { dismiss() }} /> }}>
-        {chapters.map(chapter => (
-          <Button key={chapter.id} title={chapter.title} action={() => { select(chapter); dismiss() }} />
-        ))}
-      </List>
+      <ScrollView
+        navigationTitle="章节目录"
+        navigationBarTitleDisplayMode="inline"
+        toolbar={{ cancellationAction: <Button title="关闭" action={() => { dismiss() }} /> }}
+      >
+        <VStack padding={16}>
+          <ChapterDirectoryRows chapters={chapters} openChapter={chapter => { select(chapter); dismiss() }} />
+        </VStack>
+      </ScrollView>
     </NavigationStack>
   )
 }
