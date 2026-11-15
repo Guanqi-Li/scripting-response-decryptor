@@ -92,8 +92,15 @@ function MainView() {
 }
 
 async function main() {
-  try { await Navigation.present({ element: <MainView /> }) }
-  catch (error) { await Dialog.alert({ title: "启动失败", message: error instanceof Error ? error.message : String(error) }) }
-  finally { Script.exit() }
+  try {
+    await Navigation.present({
+      element: <MainView />,
+      modalPresentationStyle: "fullScreen",
+    })
+  } catch (error) {
+    await Dialog.alert({ title: "启动失败", message: error instanceof Error ? error.message : String(error) })
+  } finally {
+    Script.exit()
+  }
 }
 main()
