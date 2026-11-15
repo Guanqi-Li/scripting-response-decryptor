@@ -1,0 +1,9 @@
+{
+  "name": "响应解密",
+  "version": "1.0.0",
+  "entry": "index.tsx",
+  "icon": "lock.open",
+  "color": "#007AFF",
+  "description": "从剪贴板读取响应 JSON，使用 AES-256-CBC 和 PKCS#7 解密。",
+  "runInApp": true
+}
