@@ -1,8 +1,10 @@
-# GET 响应解密 · 1.1.1
+# GET 响应解密 · 1.1.2
 
 Scripting 仓库导入地址：https://github.com/Guanqi-Li/scripting-response-decryptor
 
 ## 使用
+
+脚本启动后全屏展开，保留系统状态栏。
 
 1. 在主界面的“接口网址”输入框中输入或粘贴完整网址，例如 https://www.18akmanhua.com/api/banners 。
 2. 如接口需要登录，点击“设置 token”；否则留空。token 仅保存在本次运行内存中。
