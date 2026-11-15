@@ -1,7 +1,6 @@
 import { requestAndDecrypt } from "./request"
 
 export const SITE_ORIGIN = "https://www.18akmanhua.com"
-export const NEW_CATEGORY = { id: 0, name: "新作" }
 const PAGE_SIZE = 15
 
 export type Category = { id: number; name: string }
@@ -18,11 +17,6 @@ function isID(value: unknown): value is number {
 
 function isCategory(value: unknown): value is Category {
   return isRecord(value) && isID(value.id) && typeof value.name === "string" && value.name.trim().length > 0
-}
-
-function isComic(value: unknown): value is Comic {
-  return isRecord(value) && isID(value.bookID) && typeof value.title === "string"
-    && typeof value.author === "string" && typeof value.coverURL === "string"
 }
 
 function coverURL(path: unknown): string {
@@ -55,9 +49,7 @@ export async function fetchCategories(signal: AbortSignal): Promise<Category[]> 
   if (!Array.isArray(value) || !value.every(isCategory)) {
     throw new Error("解密后的分类数据格式有误。")
   }
-  const otherCategories = new Map(value.filter(category => category.id !== NEW_CATEGORY.id)
-    .map(category => [category.id, category]))
-  return [NEW_CATEGORY, ...otherCategories.values()]
+  return [...new Map(value.map(category => [category.id, category])).values()]
 }
 
 export async function fetchCatalog(categoryID: number, page: number, signal: AbortSignal): Promise<Catalog> {
@@ -80,27 +72,12 @@ export function appendCatalog(previous: Catalog | undefined, next: Catalog): Cat
   return { ...next, books: [...books.values()] }
 }
 
-function catalogKey(categoryID: number): string {
-  return `stacks-v1:type1:size${PAGE_SIZE}:category${categoryID}`
-}
-
-export function readCatalog(categoryID: number): Catalog | undefined {
+export function clearLegacyCatalogCache() {
   try {
-    const value = Storage.get<unknown>(catalogKey(categoryID))
-    if (isRecord(value) && isID(value.page) && value.page > 0 && isID(value.totalPage)
-      && Array.isArray(value.books) && value.books.every(isComic)) {
-      return { page: value.page, totalPage: value.totalPage, books: value.books }
+    for (const key of Storage.keys()) {
+      if (/^stacks-v1:type1:size15:category\d+$/.test(key)) Storage.remove(key)
     }
   } catch (error) {
-    console.warn("无法读取漫画缓存", error)
-  }
-  return undefined
-}
-
-export function saveCatalog(categoryID: number, value: Catalog) {
-  try {
-    if (!Storage.set(catalogKey(categoryID), value)) console.warn("无法保存漫画缓存")
-  } catch (error) {
-    console.warn("无法保存漫画缓存", error)
+    console.warn("无法清理旧版漫画缓存", error)
   }
 }
