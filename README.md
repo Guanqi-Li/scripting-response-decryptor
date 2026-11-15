@@ -1,4 +1,4 @@
-# GET 响应解密 · 1.6.0
+# GET 响应解密 · 1.6.1
 
 Scripting 仓库导入地址：https://github.com/Guanqi-Li/scripting-response-decryptor
 
