@@ -1,20 +1,28 @@
 import {
-  Button, HStack, ProgressView, ScrollView, Text, VStack,
+  Button, Dialog, HStack, Navigation, ProgressView, ScrollView, Text, VStack,
   useEffect, useRef, useState,
 } from "scripting"
 import { ComicCover, type CoverCache } from "./ComicGrid"
-import { ChapterDirectoryView, type ChapterDirectoryCache } from "./ChapterDirectoryView"
-import { fetchBookDetails, type Comic } from "./catalog"
+import { ChapterDirectoryView, getAdjacentChapter, getChapters, type ChapterDirectoryCache } from "./ChapterDirectoryView"
+import { fetchBookDetails, type Chapter, type Comic } from "./catalog"
+import { ChapterReader } from "./ChapterReader"
+import type { ReaderCache } from "./reader-cache"
+import { chapterLabel, type ReadingRecord } from "./reading-history"
 
-export function ComicDetailView({ book, covers, cache, directories }: {
+export function ComicDetailView({ book, covers, cache, directories, readerCache, progress, refreshHistory }: {
   book: Comic
   covers: CoverCache
   cache: Map<number, Comic>
   directories: ChapterDirectoryCache
+  readerCache: ReaderCache
+  progress?: ReadingRecord
+  refreshHistory: () => void
 }) {
   const [detail, setDetail] = useState<Comic | null>(cache.get(book.bookID) ?? null)
   const [error, setError] = useState("")
   const active = useRef<AbortController | null>(null)
+  const [firstChapter, setFirstChapter] = useState<Chapter | null>(directories.get(book.bookID)?.pages.get(1)?.[0] ?? null)
+  const opening = useRef(false)
 
   useEffect(() => {
     if (!detail) void loadDetails()
@@ -42,6 +50,26 @@ export function ComicDetailView({ book, covers, cache, directories }: {
   }
 
   const display = detail ?? book
+
+  async function openReader(chapter: Chapter, page = 1) {
+    if (opening.current) return
+    opening.current = true
+    try {
+      await Navigation.present({
+        element: <ChapterReader book={display} chapter={chapter} initialPage={page} cache={readerCache}
+          getChapters={() => getChapters(book.bookID, directories)}
+          getAdjacent={(current, direction) => getAdjacentChapter(book.bookID, directories, current, direction)} />,
+        modalPresentationStyle: "fullScreen",
+      })
+    } catch (error) {
+      await Dialog.alert({ title: "无法打开阅读器", message: error instanceof Error ? error.message : String(error) })
+    } finally {
+      opening.current = false
+      refreshHistory()
+    }
+  }
+
+  const startChapter = progress?.chapter ?? firstChapter
   return (
     <ScrollView navigationTitle="漫画详情" navigationBarTitleDisplayMode="inline">
       <VStack alignment="leading" spacing={18} padding={16}>
@@ -58,7 +86,12 @@ export function ComicDetailView({ book, covers, cache, directories }: {
                 {display.latestChapter !== null ? `最新章节 第 ${display.latestChapter} 话` : "最新章节 —"}
               </Text>
             </VStack>
-
+            <Button
+              title={progress ? `继续阅读 ${chapterLabel(progress.chapter)}` : "开始阅读"}
+              buttonStyle="borderedProminent"
+              disabled={!startChapter}
+              action={() => { if (startChapter) void openReader(startChapter, progress?.page ?? 1) }}
+            />
           </VStack>
         </HStack>
         {error ? (
@@ -67,7 +100,8 @@ export function ComicDetailView({ book, covers, cache, directories }: {
             <Button title="重试" action={loadDetails} />
           </VStack>
         ) : detail ? null : <ProgressView />}
-        <ChapterDirectoryView key={book.bookID} bookID={book.bookID} cache={directories} />
+        <ChapterDirectoryView key={book.bookID} bookID={book.bookID} cache={directories}
+          openChapter={chapter => { void openReader(chapter) }} onFirstChapter={setFirstChapter} />
       </VStack>
     </ScrollView>
   )
