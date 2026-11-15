@@ -41,16 +41,36 @@ export async function requestAndDecrypt(input: string, token: string, signal: Ab
     if (signal.aborted) throw new Error("请求已取消")
     throw new Error("网络请求失败或超过 15 秒，请检查网址和网络连接。" + (error instanceof Error ? " " + error.message : ""))
   }
-  if (!response.ok) throw new Error(`HTTP ${response.status}：${body.slice(0, 300) || "服务器未返回内容"}`)
-  if (!body.trim()) throw new Error(`HTTP ${response.status}：响应为空`)
+  const status = `HTTP ${response.status}`
+  if (!body.trim()) throw new Error(`${status}：响应为空`)
+
+  let envelope: unknown
   try {
-    const value = decryptResponse(body)
-    const envelope: unknown = JSON.parse(body)
-    if (typeof envelope === "object" && envelope !== null && "code" in envelope && typeof envelope.code === "number" && envelope.code >= 400) {
-      const message = "msg" in envelope && typeof envelope.msg === "string" ? envelope.msg : "接口返回错误"
-      throw new Error(`接口 ${envelope.code}：${message}`)
-    }
-    return { status: response.status, value }
+    envelope = JSON.parse(body)
+  } catch {
+    if (!response.ok) throw new Error(`${status}：${body.slice(0, 300)}`)
+    throw new Error(`${status}：响应不是有效的 JSON`)
   }
-  catch (error) { throw new Error(`HTTP ${response.status}：${error instanceof Error ? error.message : String(error)}`) }
+
+  if (typeof envelope === "object" && envelope !== null) {
+    const rawCode = "code" in envelope ? envelope.code : undefined
+    const code = typeof rawCode === "string" && /^\d+$/.test(rawCode) ? Number(rawCode) : rawCode
+    const candidates = [
+      "message" in envelope ? envelope.message : undefined,
+      "msg" in envelope ? envelope.msg : undefined,
+    ]
+    const message = candidates.find((value): value is string => typeof value === "string" && value.trim() !== "")?.trim()
+    if (typeof code === "number" && code >= 400) {
+      const fallback = code === 401 ? "网站拒绝了当前请求，请检查登录状态或章节权限。" : "接口返回错误"
+      throw new Error(`${status}：接口 ${code}：${message || fallback}`)
+    }
+    if (!response.ok && message) throw new Error(`${status}：${message}`)
+  }
+  if (!response.ok) throw new Error(`${status}：${body.slice(0, 300)}`)
+
+  try {
+    return { status: response.status, value: decryptResponse(envelope) }
+  } catch (error) {
+    throw new Error(`${status}：${error instanceof Error ? error.message : String(error)}`)
+  }
 }
