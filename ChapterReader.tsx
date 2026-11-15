@@ -35,10 +35,13 @@ function ReaderDirectory({ chapters, select }: { chapters: Chapter[]; select: (c
   )
 }
 
-export function ChapterReader({ book, chapter, initialPage, cache, getChapters, getAdjacent }: {
+export type ReaderOpening = { data: ReaderChapter } | { error: unknown }
+
+export function ChapterReader({ book, chapter, initialPage, opening, cache, getChapters, getAdjacent }: {
   book: Comic
   chapter: Chapter
   initialPage: number
+  opening: ReaderOpening
   cache: ReaderCache
   getChapters: () => Chapter[]
   getAdjacent: (chapter: Chapter, direction: -1 | 1) => Chapter | undefined
@@ -46,20 +49,26 @@ export function ChapterReader({ book, chapter, initialPage, cache, getChapters, 
   const dismiss = Navigation.useDismiss()
   const request = useRef<ReaderRequests | null>(null)
   const requests = request.current ?? (request.current = new ReaderRequests(cache, book.bookID))
-  const pages = useObservable<ReaderPage[]>([])
-  const selected = useObservable(chapter)
-  const position = useObservable<string | null>(null)
+  const initialPages = useRef<ReaderPage[] | null>(null)
+  if (initialPages.current === null) initialPages.current = "data" in opening ? makePages(opening.data) : []
+  const initialTarget = initialPages.current[Math.min(initialPages.current.length, Math.max(1, initialPage)) - 1]
+  const openingError = "error" in opening ? opening.error : undefined
+  const pages = useObservable(initialPages.current)
+  const selected = useObservable(initialTarget?.chapter ?? chapter)
+  const position = useObservable<string | null>(initialTarget?.id ?? null)
   const controls = useObservable(false)
   const busy = useObservable(false)
-  const error = useObservable("")
-  const needsToken = useObservable(false)
+  const error = useObservable("error" in opening
+    ? openingError instanceof Error ? openingError.message : String(openingError)
+    : "")
+  const needsToken = useObservable(openingError instanceof ApiError && (openingError.code === 401 || openingError.status === 401))
   const tokenPromptOpen = useRef(false)
   const warning = useObservable("")
   const revision = useObservable(0)
   const mounted = useRef(true)
   const scrollKey = useObservable(0)
   const visible = useRef<string[]>([])
-  const target = useRef<string | null>(null)
+  const target = useRef<string | null>(initialTarget?.id ?? null)
   const last = useRef<ReadingRecord | null>(null)
   const lastSaved = useRef("")
   const prefetch = useRef<{ forChapter: number; data?: ReaderChapter } | null>(null)
@@ -260,7 +269,8 @@ export function ChapterReader({ book, chapter, initialPage, cache, getChapters, 
       if (visible.current.length) reportVisible(visible.current)
     }
     position.subscribe(onPositionChanged)
-    void openChapter(chapter, initialPage)
+    if (initialTarget) prioritize([initialTarget.id])
+    else retry.current = () => { void openChapter(chapter, initialPage) }
     return () => {
       position.unsubscribe(onPositionChanged)
       mounted.current = false
