@@ -125,7 +125,7 @@ export function ComicGrid({ entry, covers, loadPage, openBook }: {
         },
       }}
     >
-      <VStack spacing={14} padding={{ horizontal: 16, top: 12, bottom: 16 }}>
+      <VStack spacing={14} padding={{ horizontal: 16, top: 12, bottom: 72 }}>
         {data?.books.length ? (
           <LazyVGrid columns={columns} spacing={14}>
             {data.books.map(book => <ComicCard key={book.bookID} book={book} covers={covers} openBook={openBook} />)}
