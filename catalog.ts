@@ -13,7 +13,6 @@ export type Comic = {
   latestChapter: number | null
 }
 export type Catalog = { page: number; totalPage: number; books: Comic[] }
-export type ComicDetails = Comic & { description: string }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null
@@ -85,7 +84,7 @@ export async function fetchCatalog(categoryID: number, page: number, signal: Abo
   return { page, totalPage: value.totalPage, books: value.list.map(parseComic) }
 }
 
-export async function fetchBookDetails(book: Comic, signal: AbortSignal): Promise<ComicDetails> {
+export async function fetchBookDetails(book: Comic, signal: AbortSignal): Promise<Comic> {
   const url = new URL("/api/bookDetails", SITE_ORIGIN)
   url.searchParams.set("book_id", String(book.bookID))
   const { value } = await requestAndDecrypt(url.href, "", signal)
@@ -101,7 +100,6 @@ export async function fetchBookDetails(book: Comic, signal: AbortSignal): Promis
     title: typeof detail.title === "string" && detail.title.trim() ? detail.title : book.title,
     author: typeof detail.author === "string" && detail.author.trim() ? detail.author : book.author,
     coverURL: coverURL(detail.image) || book.coverURL,
-    description: textValue(detail.desc),
     updatedAt: textValue(lastChapter?.updated_at) || textValue(detail.renew_time) || book.updatedAt,
     latestChapter: chapterNumber(chapter?.sumChapters) ?? book.latestChapter,
   }
