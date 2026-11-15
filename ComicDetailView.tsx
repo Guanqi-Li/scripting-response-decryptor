@@ -23,7 +23,6 @@ function Synopsis({ text }: { text: string }) {
 
   return (
     <VStack alignment="leading" spacing={5}>
-      <Text font="headline">简介</Text>
       <ZStack alignment="bottomTrailing">
         <Text
           lineLimit={expanded ? undefined : 2}
@@ -96,19 +95,17 @@ export function ComicDetailView({ book, covers, cache }: {
           <VStack alignment="leading" spacing={8} frame={{ maxWidth: "infinity", alignment: "leading" }}>
             <Text font="title2" fontWeight="semibold" fixedSize={{ horizontal: false, vertical: true }}>{display.title}</Text>
             {display.author ? <Text font="subheadline">{display.author}</Text> : null}
-            {detail ? (
-              <VStack alignment="leading" spacing={6}>
-                <Text font="footnote" foregroundStyle="secondaryLabel">
-                  {detail.updatedAt ? `最近更新时间 ${detail.updatedAt}` : "最近更新时间 —"}
-                </Text>
-                <Text font="footnote" foregroundStyle="secondaryLabel">
-                  {detail.latestChapter !== null ? `最新章节 第 ${detail.latestChapter} 话` : "最新章节 —"}
-                </Text>
-              </VStack>
-            ) : null}
+            <VStack alignment="leading" spacing={6}>
+              <Text font="footnote" foregroundStyle="secondaryLabel">
+                {display.updatedAt ? `最近更新时间 ${display.updatedAt}` : "最近更新时间 —"}
+              </Text>
+              <Text font="footnote" foregroundStyle="secondaryLabel">
+                {display.latestChapter !== null ? `最新章节 第 ${display.latestChapter} 话` : "最新章节 —"}
+              </Text>
+            </VStack>
+            {detail?.description ? <Synopsis key={detail.bookID} text={detail.description} /> : null}
           </VStack>
         </HStack>
-        {detail?.description ? <Synopsis key={detail.bookID} text={detail.description} /> : null}
         {error ? (
           <VStack alignment="leading" spacing={8}>
             <Text>详情加载失败。{error}</Text>
