@@ -1,6 +1,6 @@
 {
   "name": "响应解密",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "entry": "index.tsx",
   "icon": "lock.open",
   "color": "#007AFF",
