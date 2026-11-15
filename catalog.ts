@@ -4,13 +4,16 @@ export const SITE_ORIGIN = "https://www.18akmanhua.com"
 const PAGE_SIZE = 15
 
 export type Category = { id: number; name: string }
-export type Comic = { bookID: number; title: string; author: string; coverURL: string }
-export type Catalog = { page: number; totalPage: number; books: Comic[] }
-export type ComicDetails = Comic & {
-  description: string
+export type Comic = {
+  bookID: number
+  title: string
+  author: string
+  coverURL: string
   updatedAt: string
   latestChapter: number | null
 }
+export type Catalog = { page: number; totalPage: number; books: Comic[] }
+export type ComicDetails = Comic & { description: string }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null
@@ -18,6 +21,15 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isID(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
+}
+
+function textValue(value: unknown): string {
+  return typeof value === "string" ? value.trim() : ""
+}
+
+function chapterNumber(value: unknown): number | null {
+  const number = typeof value === "string" && /^\d+$/.test(value.trim()) ? Number(value) : value
+  return isID(number) && number > 0 ? number : null
 }
 
 function isCategory(value: unknown): value is Category {
@@ -38,7 +50,8 @@ function parseComic(value: unknown): Comic {
   if (!isRecord(value) || typeof value.title !== "string") {
     throw new Error("漫画资料格式有误。")
   }
-  const chapterID = isRecord(value.last_chapter) ? value.last_chapter.book_id : undefined
+  const lastChapter = isRecord(value.last_chapter) ? value.last_chapter : null
+  const chapterID = lastChapter?.book_id
   const bookID = isID(chapterID) ? chapterID : value.id
   if (!isID(bookID)) throw new Error("漫画资料缺少 book_id。")
   return {
@@ -46,6 +59,8 @@ function parseComic(value: unknown): Comic {
     title: value.title,
     author: typeof value.author === "string" ? value.author : "",
     coverURL: coverURL(value.image),
+    updatedAt: textValue(value.renew_time),
+    latestChapter: chapterNumber(lastChapter?.sort),
   }
 }
 
@@ -86,9 +101,9 @@ export async function fetchBookDetails(book: Comic, signal: AbortSignal): Promis
     title: typeof detail.title === "string" && detail.title.trim() ? detail.title : book.title,
     author: typeof detail.author === "string" && detail.author.trim() ? detail.author : book.author,
     coverURL: coverURL(detail.image) || book.coverURL,
-    description: typeof detail.desc === "string" ? detail.desc.trim() : "",
-    updatedAt: typeof lastChapter?.updated_at === "string" ? lastChapter.updated_at.trim() : "",
-    latestChapter: isID(chapter?.sumChapters) ? chapter.sumChapters : null,
+    description: textValue(detail.desc),
+    updatedAt: textValue(lastChapter?.updated_at) || textValue(detail.renew_time) || book.updatedAt,
+    latestChapter: chapterNumber(chapter?.sumChapters) ?? book.latestChapter,
   }
 }
 
