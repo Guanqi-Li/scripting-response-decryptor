@@ -1,6 +1,6 @@
 {
-  "name": "响应解密",
-  "version": "1.6.10",
+  "name": "爱漫画",
+  "version": "1.6.11",
   "entry": "index.tsx",
   "icon": "lock.open",
   "color": "#007AFF",
