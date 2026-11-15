@@ -23,6 +23,13 @@ export function makeHeaders(apiPath: string, method = "GET", token?: string, now
   return headers
 }
 
+export class ApiError extends Error {
+  constructor(message: string, readonly status: number, readonly code?: number) {
+    super(message)
+    this.name = "ApiError"
+  }
+}
+
 export async function requestAndDecrypt(input: string, token: string, signal: AbortSignal): Promise<{ status: number, value: unknown }> {
   const target = parseApiURL(input)
   let response: Response
@@ -42,13 +49,13 @@ export async function requestAndDecrypt(input: string, token: string, signal: Ab
     throw new Error("网络请求失败或超过 15 秒，请检查网址和网络连接。" + (error instanceof Error ? " " + error.message : ""))
   }
   const status = `HTTP ${response.status}`
-  if (!body.trim()) throw new Error(`${status}：响应为空`)
+  if (!body.trim()) throw new ApiError(`${status}：响应为空`, response.status)
 
   let envelope: unknown
   try {
     envelope = JSON.parse(body)
   } catch {
-    if (!response.ok) throw new Error(`${status}：${body.slice(0, 300)}`)
+    if (!response.ok) throw new ApiError(`${status}：${body.slice(0, 300)}`, response.status)
     throw new Error(`${status}：响应不是有效的 JSON`)
   }
 
@@ -62,11 +69,11 @@ export async function requestAndDecrypt(input: string, token: string, signal: Ab
     const message = candidates.find((value): value is string => typeof value === "string" && value.trim() !== "")?.trim()
     if (typeof code === "number" && code >= 400) {
       const fallback = code === 401 ? "网站拒绝了当前请求，请检查登录状态或章节权限。" : "接口返回错误"
-      throw new Error(`${status}：接口 ${code}：${message || fallback}`)
+      throw new ApiError(`${status}：接口 ${code}：${message || fallback}`, response.status, code)
     }
-    if (!response.ok && message) throw new Error(`${status}：${message}`)
+    if (!response.ok && message) throw new ApiError(`${status}：${message}`, response.status)
   }
-  if (!response.ok) throw new Error(`${status}：${body.slice(0, 300)}`)
+  if (!response.ok) throw new ApiError(`${status}：${body.slice(0, 300)}`, response.status)
 
   try {
     return { status: response.status, value: decryptResponse(envelope) }
