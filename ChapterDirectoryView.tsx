@@ -18,13 +18,37 @@ function orderedChapters(directory: ChapterDirectory | undefined): Chapter[] {
   return [...chapters.values()]
 }
 
-export function ChapterDirectoryView({ bookID, cache }: { bookID: number; cache: ChapterDirectoryCache }) {
+export function getChapters(bookID: number, cache: ChapterDirectoryCache): Chapter[] {
+  return orderedChapters(cache.get(bookID))
+}
+
+export function getAdjacentChapter(
+  bookID: number, cache: ChapterDirectoryCache, current: Chapter, direction: -1 | 1,
+): Chapter | undefined {
+  const directory = cache.get(bookID)
+  const chapters = orderedChapters(directory)
+  const index = chapters.findIndex(chapter => chapter.id === current.id)
+  const next = index < 0 ? undefined : chapters[index + direction]
+  if (!directory || !next) return undefined
+  const entries = [...directory.pages.entries()].sort(([a], [b]) => a - b)
+  const currentPage = entries.find(([, rows]) => rows.some(row => row.id === current.id))?.[0]
+  const nextPage = entries.find(([, rows]) => rows.some(row => row.id === next.id))?.[0]
+  return currentPage !== undefined && nextPage !== undefined && Math.abs(currentPage - nextPage) <= 1 ? next : undefined
+}
+
+export function ChapterDirectoryView({ bookID, cache, openChapter, onFirstChapter }: {
+  bookID: number
+  cache: ChapterDirectoryCache
+  openChapter: (chapter: Chapter) => void
+  onFirstChapter: (chapter: Chapter | null) => void
+}) {
   const [chapters, setChapters] = useState(orderedChapters(cache.get(bookID)))
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState("")
   const active = useRef<AbortController | null>(null)
 
   useEffect(() => {
+    onFirstChapter(cache.get(bookID)?.pages.get(1)?.[0] ?? null)
     void loadDirectory()
     return () => {
       active.current?.abort()
@@ -48,6 +72,7 @@ export function ChapterDirectoryView({ bookID, cache }: { bookID: number; cache:
         if (signal.aborted) return
         directory = { totalPage: first.totalPage, pages: new Map([[1, first.chapters]]) }
         cache.set(bookID, directory)
+        onFirstChapter(first.chapters[0] ?? null)
         setChapters(orderedChapters(directory))
       }
 
@@ -93,10 +118,13 @@ export function ChapterDirectoryView({ bookID, cache }: { bookID: number; cache:
         <LazyVStack alignment="leading" spacing={0}>
           {chapters.map((chapter, index) => (
             <VStack key={chapter.id} alignment="leading" spacing={0}>
-              <Text
-                padding={{ vertical: 10 }}
-                frame={{ maxWidth: "infinity", minHeight: 52, alignment: "leading" }}
-              >{chapter.title}</Text>
+              <Button buttonStyle="plain" action={() => openChapter(chapter)}>
+                <Text
+                  padding={{ vertical: 10 }}
+                  frame={{ maxWidth: "infinity", minHeight: 52, alignment: "leading" }}
+                  contentShape="rect"
+                >{chapter.title}</Text>
+              </Button>
               {index < chapters.length - 1 ? <Divider /> : null}
             </VStack>
           ))}
