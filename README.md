@@ -1,10 +1,12 @@
-# GET 响应解密 · 1.1.2
+# GET 响应解密 · 1.2.0
 
 Scripting 仓库导入地址：https://github.com/Guanqi-Li/scripting-response-decryptor
 
 ## 使用
 
-脚本启动后全屏展开，保留系统状态栏。
+脚本启动后全屏展开，自动请求并解密 `/api/stacksCategories`。顶部分类栏按接口顺序展示名称，默认选中第一项，可横向滑动和点击切换。分类保留 `{ id, name }`，当前选中项的 ID 由 `selectedCategoryID` 保存，包括 ID `0`。分类加载失败时可重试。
+
+手动请求其他接口：
 
 1. 在主界面的“接口网址”输入框中输入或粘贴完整网址，例如 https://www.18akmanhua.com/api/banners 。
 2. 如接口需要登录，点击“设置 token”；否则留空。token 仅保存在本次运行内存中。
