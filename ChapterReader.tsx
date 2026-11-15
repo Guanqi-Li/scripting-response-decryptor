@@ -158,7 +158,7 @@ export function ChapterReader({ book, chapter, initialPage, cache, getChapters, 
     try {
       const value = await Dialog.prompt({
         title: "设置阅读 token",
-        message: "请输入你自己账号的有效 token。退出脚本后会清除。",
+        message: "请输入你自己账号的有效 token，将保存到本机钥匙串。",
         placeholder: "token",
         obscureText: true,
         confirmLabel: "重试章节",
@@ -169,8 +169,11 @@ export function ChapterReader({ book, chapter, initialPage, cache, getChapters, 
         await Dialog.alert({ title: "token 格式不正确", message: "请只输入一行 token。" })
         return
       }
-      setReaderToken(token)
-      retry.current?.()
+      const saved = setReaderToken(token)
+      if (!saved) {
+        await Dialog.alert({ title: "无法保存到钥匙串", message: "这次运行仍可使用，退出后需要重新输入。" })
+      }
+      if (mounted.current) retry.current?.()
     } catch {
       if (mounted.current) error.setValue("无法打开 token 输入框，请重试。")
     } finally {
