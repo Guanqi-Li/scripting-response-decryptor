@@ -365,8 +365,8 @@ export function ChapterReader({ book, chapter, initialPage, opening, cache, getC
       {controls.value ? (
         <VStack spacing={0} padding={16} frame={{ maxWidth: "infinity", maxHeight: "infinity" }}>
           <HStack spacing={12} padding={12} background={{ style: "rgba(25,25,25,0.94)", shape: { type: "rect", cornerRadius: 18 } }}>
-            <Button title="返回" systemImage="chevron.left" action={close} />
-            <Text font="headline" foregroundStyle="white" lineLimit={2}>{selected.value.title || chapterLabel(selected.value)}</Text>
+            <Button title="返回" systemImage="chevron.left" font="subheadline" action={close} />
+            <Text font="subheadline" foregroundStyle="white" lineLimit={2}>{selected.value.title || chapterLabel(selected.value)}</Text>
             <Spacer />
           </HStack>
           <Spacer />
