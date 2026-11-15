@@ -13,7 +13,7 @@ export type Comic = {
   latestChapter: number | null
 }
 export type Catalog = { page: number; totalPage: number; books: Comic[] }
-export type Chapter = { id: number; title: string }
+export type Chapter = { id: number; title: string; number?: number }
 export type ChapterPage = { totalPage: number; chapters: Chapter[] }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -122,9 +122,29 @@ export async function fetchChapterPage(bookID: number, page: number, signal: Abo
       || (chapter.book_id !== undefined && chapter.book_id !== bookID)) {
       throw new Error("章节资料格式有误。")
     }
-    return { id: chapter.id, title: chapter.title }
+    return { id: chapter.id, title: chapter.title, number: chapterNumber(chapter.sort) ?? undefined }
   })
   return { totalPage: value.totalPage, chapters }
+}
+
+export type ReaderChapter = { chapter: Chapter; images: string[] }
+
+export async function fetchReaderChapter(bookID: number, chapter: Chapter, signal: AbortSignal): Promise<ReaderChapter> {
+  const url = new URL("/api/chaptersDetails", SITE_ORIGIN)
+  url.searchParams.set("chapter_id", String(chapter.id))
+  const { value } = await requestAndDecrypt(url.href, "", signal)
+  if (!isRecord(value) || !isRecord(value.chapterDetail)) throw new Error("章节详情格式有误。")
+  const detail = value.chapterDetail
+  if (detail.id !== chapter.id || detail.book_id !== bookID || !Array.isArray(detail.image_list)) {
+    throw new Error("章节详情与当前漫画不匹配。")
+  }
+  const images = detail.image_list.map(coverURL)
+  if (!images.length || images.some(url => !url)) throw new Error("这一话的图片列表为空或包含无效地址。")
+  return {
+    chapter: { id: chapter.id, title: textValue(detail.title) || chapter.title,
+      number: chapterNumber(detail.sort) ?? chapter.number },
+    images,
+  }
 }
 
 export function appendCatalog(previous: Catalog | undefined, next: Catalog): Catalog {
