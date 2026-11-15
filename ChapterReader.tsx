@@ -101,10 +101,10 @@ export function ChapterReader({ book, chapter, initialPage, opening, cache, getC
   const needsToken = useObservable(openingError instanceof ApiError && (openingError.code === 401 || openingError.status === 401))
   const tokenPromptOpen = useRef(false)
   const warning = useObservable("")
-  const observingTail = useObservable(false)
   const mounted = useRef(true)
   const scrollKey = useObservable(0)
   const visible = useRef<string[]>([])
+  const reachedEnd = useRef<string | null>(null)
   const activePage = useRef<ReaderPage | null>(null)
   const indexed = useRef<{ items: ReaderPage[]; byID: Map<string, number> } | null>(null)
   const target = useRef<string | null>(initialTarget?.id ?? null)
@@ -186,9 +186,6 @@ export function ChapterReader({ book, chapter, initialPage, opening, cache, getC
     target.current = null
     const changed = ids.length !== visible.current.length || ids.some(id => !visible.current.includes(id))
     visible.current = ids
-    const tail = pages.value[pages.value.length - 1]
-    const watchTail = tail !== undefined && ids.includes(tail.id)
-    if (observingTail.value !== watchTail) observingTail.setValue(watchTail)
     if (changed) prioritize(ids)
     const index = visibleIndexes(firstID ? [firstID] : ids)[0]
     const page = pages.value[index]
@@ -261,7 +258,7 @@ export function ChapterReader({ book, chapter, initialPage, opening, cache, getC
       last.current = null
       visible.current = []
       activePage.current = null
-      observingTail.setValue(false)
+      reachedEnd.current = null
       prefetch.current = null
       const items = makePages(data)
       const start = items[Math.min(items.length, Math.max(1, resumePage)) - 1]
@@ -278,6 +275,13 @@ export function ChapterReader({ book, chapter, initialPage, opening, cache, getC
     }
   }
 
+  function maybeAppend() {
+    const tail = pages.value[pages.value.length - 1]
+    if (tail && reachedEnd.current === tail.id && !error.value && cache.images.has(tail.url)) {
+      void appendChapter()
+    }
+  }
+
   async function appendChapter() {
     const items = pages.value
     if (busy.value || !mounted.current || !items.length) return
@@ -290,7 +294,7 @@ export function ChapterReader({ book, chapter, initialPage, opening, cache, getC
     try {
       const data = await requests.chapter(next)
       if (!mounted.current) return
-      observingTail.setValue(false)
+      reachedEnd.current = null
       pages.setValue([...items, ...makePages(data)])
       prioritize(visible.current)
     } catch (cause) {
@@ -331,6 +335,7 @@ export function ChapterReader({ book, chapter, initialPage, opening, cache, getC
     requests.changed = url => {
       const page = activePage.current
       if (page?.url === url && visible.current.includes(page.id)) recordVisiblePage(page)
+      if (pages.value[pages.value.length - 1]?.url === url) maybeAppend()
     }
     position.subscribe(onPositionChanged)
     if (initialTarget) prioritize([initialTarget.id])
@@ -345,6 +350,8 @@ export function ChapterReader({ book, chapter, initialPage, opening, cache, getC
   }, [])
 
   const items = pages.value
+  const tail = items[items.length - 1]
+  const endMarker = tail ? `chapter-end:${tail.id}` : null
   const previous = controls.value ? getAdjacent(selected.value, -1) : undefined
   const next = controls.value ? getAdjacent(selected.value, 1) : undefined
 
@@ -363,20 +370,24 @@ export function ChapterReader({ book, chapter, initialPage, opening, cache, getC
               ignoresSafeArea={{ regions: "container", edges: "all" }}
               onScrollTargetVisibilityChange={{
                 idType: "string", threshold: 0,
-                onChanged: ids => reportVisible(ids.filter((id): id is string => typeof id === "string")),
-              }}
-              onScrollGeometryChange={observingTail.value ? {
-                of: "geometry",
-                onChanged: (previous, current) => {
-                  const tail = pages.value[pages.value.length - 1]
-                  const bottom = Math.max(-current.contentInsets.top,
-                    current.contentSize.height - current.containerSize.height + current.contentInsets.bottom)
-                  if (tail && !error.value && visible.current.includes(tail.id) && cache.images.has(tail.url)
-                    && current.contentOffset.y > previous.contentOffset.y && current.contentOffset.y >= bottom + 12) {
-                    void appendChapter()
-                  }
+                onChanged: ids => {
+                  if (!tail || pages.value[pages.value.length - 1]?.id !== tail.id) return
+                  const pageIDs = ids.filter((id): id is string => typeof id === "string" && id !== endMarker)
+                  reportVisible(pageIDs)
+                  if (target.current) return
+                  reachedEnd.current = endMarker !== null && ids.includes(endMarker) ? tail.id : null
+                  maybeAppend()
                 },
-              } : undefined}
+              }}
+              onScrollPhaseChange={(previous, _next, { geometry }) => {
+                if (previous !== "interacting" && previous !== "decelerating") return
+                if (!tail || target.current || pages.value[pages.value.length - 1]?.id !== tail.id || !visible.current.includes(tail.id)) return
+                const bottom = Math.max(-geometry.contentInsets.top,
+                  geometry.contentSize.height - geometry.containerSize.height + geometry.contentInsets.bottom)
+                if (geometry.contentOffset.y < bottom - 2) return
+                reachedEnd.current = tail.id
+                maybeAppend()
+              }}
             >
               <LazyVStack spacing={0} scrollTargetLayout>
                 {items.map(page => (
@@ -385,6 +396,7 @@ export function ChapterReader({ book, chapter, initialPage, opening, cache, getC
                       placeholderHeight={geometry.size.height} showControls={showControls} />
                   </VStack>
                 ))}
+                {endMarker !== null ? <Rectangle key={endMarker} fill="black" frame={{ height: 1 }} accessibilityHidden /> : null}
               </LazyVStack>
             </ScrollView>
           )}
