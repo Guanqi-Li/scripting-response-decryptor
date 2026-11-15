@@ -52,30 +52,40 @@ const columns: GridItem[] = Array.from({ length: 3 }, () => ({
   size: { type: "flexible", min: 0 }, spacing: 10, alignment: "topLeading",
 }))
 
-function ComicCard({ book, covers }: { book: Comic; covers: CoverCache }) {
-  const [cover, setCover] = useState<UIImage | null>(null)
+export function ComicCover({ url, covers, width }: { url: string; covers: CoverCache; width?: number }) {
+  const [loaded, setLoaded] = useState<{ url: string; image: UIImage } | null>(null)
 
   useEffect(() => {
-    if (!book.coverURL) return
+    if (!url) return
     let active = true
-    void covers.load(book.coverURL).then(image => {
-      if (active) setCover(image)
+    void covers.load(url).then(image => {
+      if (active && image) setLoaded({ url, image })
     })
     return () => { active = false }
-  }, [book.coverURL, covers])
+  }, [url, covers])
 
   return (
-    <VStack alignment="leading" spacing={4}>
-      <RoundedRectangle
-        cornerRadius={7}
-        fill="secondarySystemBackground"
-        aspectRatio={{ value: 2 / 3, contentMode: "fit" }}
-        overlay={cover ? <Image image={cover} resizable scaleToFill /> : undefined}
-        clipShape={{ type: "rect", cornerRadius: 7 }}
-      />
-      <Text font="subheadline" fontWeight="semibold" lineLimit={2}>{book.title}</Text>
-      {book.author ? <Text font="caption" foregroundStyle="secondaryLabel" lineLimit={2}>{book.author}</Text> : null}
-    </VStack>
+    <RoundedRectangle
+      cornerRadius={7}
+      fill="secondarySystemBackground"
+      aspectRatio={{ value: 2 / 3, contentMode: "fit" }}
+      frame={width === undefined ? undefined : { width, height: width * 1.5 }}
+      overlay={loaded?.url === url ? <Image image={loaded.image} resizable scaleToFill /> : undefined}
+      clipShape={{ type: "rect", cornerRadius: 7 }}
+      accessibilityHidden
+    />
+  )
+}
+
+function ComicCard({ book, covers, openBook }: { book: Comic; covers: CoverCache; openBook: (book: Comic) => void }) {
+  return (
+    <Button buttonStyle="plain" action={() => openBook(book)}>
+      <VStack alignment="leading" spacing={4} contentShape="rect">
+        <ComicCover url={book.coverURL} covers={covers} />
+        <Text font="subheadline" fontWeight="semibold" lineLimit={2}>{book.title}</Text>
+        {book.author ? <Text font="caption" foregroundStyle="secondaryLabel" lineLimit={2}>{book.author}</Text> : null}
+      </VStack>
+    </Button>
   )
 }
 
@@ -85,10 +95,11 @@ function distanceFromBottom(geometry: ScrollGeometry): number {
   return bottom - geometry.contentOffset.y
 }
 
-export function ComicGrid({ entry, covers, loadPage }: {
+export function ComicGrid({ entry, covers, loadPage, openBook }: {
   entry?: CatalogEntry
   covers: CoverCache
   loadPage: () => void
+  openBook: (book: Comic) => void
 }) {
   const drag = useRef({ startedAtBottom: false, interacting: false })
   const data = entry?.data
@@ -117,7 +128,7 @@ export function ComicGrid({ entry, covers, loadPage }: {
       <VStack spacing={14} padding={{ horizontal: 16, top: 12, bottom: 16 }}>
         {data?.books.length ? (
           <LazyVGrid columns={columns} spacing={14}>
-            {data.books.map(book => <ComicCard key={book.bookID} book={book} covers={covers} />)}
+            {data.books.map(book => <ComicCard key={book.bookID} book={book} covers={covers} openBook={openBook} />)}
           </LazyVGrid>
         ) : data ? <Text>暂无漫画</Text> : null}
         {entry?.loading ? <ProgressView /> : null}
