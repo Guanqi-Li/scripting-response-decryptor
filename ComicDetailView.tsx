@@ -3,12 +3,14 @@ import {
   useEffect, useRef, useState,
 } from "scripting"
 import { ComicCover, type CoverCache } from "./ComicGrid"
+import { ChapterDirectoryView, type ChapterDirectoryCache } from "./ChapterDirectoryView"
 import { fetchBookDetails, type Comic } from "./catalog"
 
-export function ComicDetailView({ book, covers, cache }: {
+export function ComicDetailView({ book, covers, cache, directories }: {
   book: Comic
   covers: CoverCache
   cache: Map<number, Comic>
+  directories: ChapterDirectoryCache
 }) {
   const [detail, setDetail] = useState<Comic | null>(cache.get(book.bookID) ?? null)
   const [error, setError] = useState("")
@@ -65,6 +67,7 @@ export function ComicDetailView({ book, covers, cache }: {
             <Button title="重试" action={loadDetails} />
           </VStack>
         ) : detail ? null : <ProgressView />}
+        <ChapterDirectoryView key={book.bookID} bookID={book.bookID} cache={directories} />
       </VStack>
     </ScrollView>
   )
