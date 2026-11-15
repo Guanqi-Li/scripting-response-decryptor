@@ -326,13 +326,14 @@ export function ChapterReader({ book, chapter, initialPage, opening, cache, getC
                       <ZStack
                         frame={{ width, height }}
                         contentShape="rect"
-                        onTapGesture={showControls}
-                        overlay={loaded ? <Image image={loaded.image} resizable
-                          frame={{ width, height }} /> : undefined}
+                        onTapGesture={loaded ? undefined : showControls}
                       >
-                        {!loaded ? requests.failed.has(page.url)
+                        {loaded ? (
+                          <Image image={loaded.image} resizable frame={{ width, height }}
+                            contentShape="rect" onTapGesture={showControls} />
+                        ) : requests.failed.has(page.url)
                           ? <Button title={`重试第 ${page.number} 张`} action={() => requests.retry(page.url)} />
-                          : <ProgressView tint="white" /> : null}
+                          : <ProgressView tint="white" />}
                       </ZStack>
                     </VStack>
                   )
