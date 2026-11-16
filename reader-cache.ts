@@ -1,7 +1,14 @@
 import { fetchReaderChapter, type Chapter, type ReaderChapter } from "./catalog"
 
 type ReaderImage = { image: UIImage; estimatedBytes: number }
-type Download = { url: string; controller: AbortController }
+export type ImageTiming = {
+  queuedAt: number
+  startedAt?: number
+  receivedAt?: number
+  finishedAt?: number
+  outcome?: "ready" | "failed" | "cancelled"
+}
+type Download = { url: string; controller: AbortController; timing: ImageTiming }
 
 export class ReaderCache {
   readonly chapters = new Map<number, ReaderChapter>()
@@ -46,6 +53,7 @@ export class ReaderRequests {
   private readonly retriedOnSight = new Set<string>()
   private readonly pendingChapters = new Map<number, Promise<ReaderChapter>>()
   private readonly downloads = new Map<string, Download>()
+  private readonly timings = new Map<string, ImageTiming>()
   private readonly lifetime = new AbortController()
   private wanted: string[] = []
   private readonly observers = new Map<string, Set<() => void>>()
@@ -68,6 +76,24 @@ export class ReaderRequests {
     })
     this.pendingChapters.set(chapter.id, request)
     return request
+  }
+
+  imageTiming(url: string): Readonly<ImageTiming> | undefined {
+    return this.timings.get(url)
+  }
+
+  private markQueued(url: string): ImageTiming {
+    const existing = this.timings.get(url)
+    if (existing && existing.startedAt === undefined) return existing
+
+    const timing: ImageTiming = { queuedAt: Date.now() }
+    this.timings.delete(url)
+    this.timings.set(url, timing)
+    if (this.timings.size > 40) {
+      const oldest = this.timings.keys().next().value
+      if (oldest !== undefined) this.timings.delete(oldest)
+    }
+    return timing
   }
 
   observe(url: string, update: () => void): () => void {
@@ -97,7 +123,13 @@ export class ReaderRequests {
     const next = [...new Set([...visible, ...urls])]
     if (next.length !== this.wanted.length || next.some((url, index) => url !== this.wanted[index])) {
       this.wanted = next
+      for (const [url, timing] of this.timings) {
+        if (timing.startedAt === undefined && !next.includes(url)) this.timings.delete(url)
+      }
       for (const url of next) this.cache.touch(url)
+    }
+    for (const url of next) {
+      if (!this.cache.images.has(url) && !this.downloads.has(url) && !this.failed.has(url)) this.markQueued(url)
     }
     const missing = visible.some(url => !this.cache.images.has(url) && !this.downloads.has(url) && !this.failed.has(url))
     if (missing && this.downloads.size >= 3 && [...this.downloads.values()].every(job =>
@@ -120,6 +152,7 @@ export class ReaderRequests {
     for (const download of this.downloads.values()) download.controller.abort()
     this.wanted = []
     this.observers.clear()
+    this.timings.clear()
   }
 
   private pump() {
@@ -127,14 +160,16 @@ export class ReaderRequests {
     for (const url of this.wanted) {
       if (this.downloads.size >= 3) break
       if (!this.cache.images.has(url) && !this.downloads.has(url) && !this.failed.has(url)) {
-        const download = { url, controller: new AbortController() }
+        const timing = this.markQueued(url)
+        timing.startedAt = Date.now()
+        const download = { url, controller: new AbortController(), timing }
         this.downloads.set(url, download)
         void this.download(download)
       }
     }
   }
 
-  private async download({ url, controller }: Download) {
+  private async download({ url, controller, timing }: Download) {
     const { signal } = controller
     let transient = true
     try {
@@ -150,6 +185,7 @@ export class ReaderRequests {
       if (signal.aborted) return
       const data = await response.data()
       if (signal.aborted) return
+      timing.receivedAt = Date.now()
       transient = false
       const image = UIImage.fromData(data)
       if (!image) throw new Error("图片解码失败。")
@@ -158,6 +194,8 @@ export class ReaderRequests {
         ? image.croppedTo?.({ x: inset, y: 0, width: image.width - inset * 2, height: image.height })
         : null
       this.cache.store(url, cropped ?? image)
+      timing.outcome = "ready"
+      timing.finishedAt = Date.now()
       for (const evicted of this.cache.trim(new Set(this.wanted))) this.notify(evicted)
     } catch {
       if (!signal.aborted) {
@@ -165,6 +203,10 @@ export class ReaderRequests {
         if (transient) this.transientFailures.add(url)
       }
     } finally {
+      if (timing.finishedAt === undefined) {
+        timing.finishedAt = Date.now()
+        timing.outcome = signal.aborted ? "cancelled" : "failed"
+      }
       this.downloads.delete(url)
       if (!this.lifetime.signal.aborted && !signal.aborted) {
         this.notify(url)

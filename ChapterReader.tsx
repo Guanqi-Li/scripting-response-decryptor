@@ -1,11 +1,11 @@
 import {
-  Button, GeometryReader, HStack, Image, LazyVStack, Navigation, NavigationStack,
+  Button, Dialog, GeometryReader, HStack, Image, LazyVStack, Navigation, NavigationStack,
   ProgressView, Rectangle, ScrollView, Spacer, Text, VStack, ZStack, useEffect, useObservable, useRef,
 } from "scripting"
 import type { Chapter, Comic, ReaderChapter } from "./catalog"
 import { ChapterDirectoryView, type ChapterDirectoryCache } from "./ChapterDirectoryView"
 import { isTransientRequestError } from "./request"
-import { ReaderRequests, type ReaderCache } from "./reader-cache"
+import { ReaderRequests, type ImageTiming, type ReaderCache } from "./reader-cache"
 import { chapterLabel, saveReadingRecord, type ReadingRecord } from "./reading-history"
 
 type ReaderPage = {
@@ -21,6 +21,22 @@ function makePages(data: ReaderChapter): ReaderPage[] {
     id: `${data.chapter.id}:${index + 1}`, url, chapter: data.chapter,
     number: index + 1, count: data.images.length,
   }))
+}
+
+function describeImageTiming(timing: Readonly<ImageTiming>, now: number): string {
+  const parts: string[] = []
+  const end = timing.finishedAt ?? now
+  const elapsed = (from: number, to: number) => `${Math.max(0, to - from)} ms`
+  parts.push(`排队 ${elapsed(timing.queuedAt, timing.startedAt ?? end)}`)
+  if (timing.startedAt !== undefined) {
+    parts.push(`下载 ${elapsed(timing.startedAt, timing.receivedAt ?? end)}`)
+  }
+  if (timing.receivedAt !== undefined) parts.push(`处理 ${elapsed(timing.receivedAt, end)}`)
+
+  const status = timing.outcome === "ready" ? "已就绪" : timing.outcome === "failed" ? "失败"
+    : timing.outcome === "cancelled" ? "已取消" : timing.receivedAt !== undefined ? "处理中"
+    : timing.startedAt !== undefined ? "下载中" : "排队中"
+  return `${status} · ${parts.join(" / ")}`
 }
 
 function ReaderImageRow({ page, cache, requests, width, placeholderHeight, previousURL, nextURL, showControls }: {
@@ -359,6 +375,22 @@ export function ChapterReader({ book, chapter, initialPage, opening, cache, dire
     }
   }
 
+  async function showImageTimings() {
+    const items = pages.value
+    const currentID = target.current ?? activePage.current?.id ?? visible.current[0]
+    const index = currentID ? pageIndex().get(currentID) ?? 0 : 0
+    const now = Date.now()
+    const lines = items.slice(Math.max(0, index - 1), index + 3).map((page, offset) => {
+      const timing = requests.imageTiming(page.url)
+      const label = `${chapterLabel(page.chapter)} · 第 ${page.number} 张`
+      const isCurrent = Math.max(0, index - 1) + offset === index
+      const detail = timing ? describeImageTiming(timing, now)
+        : cache.images.has(page.url) ? "来自内存缓存" : page.url ? "尚未入队" : "图片地址无效"
+      return `${isCurrent ? "当前 · " : ""}${label}\n${detail}`
+    })
+    await Dialog.alert({ title: "图片加载诊断", message: lines.join("\n\n") || "本章还没有图片加载记录。" })
+  }
+
   async function showDirectory() {
     if (directoryOpen.current) return
     directoryOpen.current = true
@@ -480,6 +512,9 @@ export function ChapterReader({ book, chapter, initialPage, opening, cache, dire
             <Button title="返回" systemImage="chevron.left" font="subheadline" action={close} />
             <Text font="subheadline" foregroundStyle="white" lineLimit={2}>{selected.value.title || chapterLabel(selected.value)}</Text>
             <Spacer />
+            <Button accessibilityLabel="图片加载诊断" tint="white" action={showImageTimings}>
+              <Image systemName="timer" font="body" />
+            </Button>
           </HStack>
           <Spacer />
           <HStack spacing={16} padding={12} background={{ style: "rgba(25,25,25,0.94)", shape: { type: "rect", cornerRadius: 18 } }}>

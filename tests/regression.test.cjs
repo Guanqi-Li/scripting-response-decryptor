@@ -508,6 +508,37 @@ test('visible pages take one stale download slot, then retry transient prefetch 
   requests.close()
 })
 
+test('image diagnostics distinguish queue time, download time, and native image processing time', async () => {
+  let now = 100
+  const jobs = new Map()
+  const { ReaderCache, ReaderRequests } = load('reader-cache.ts', {}, {
+    Date: { now: () => now },
+    fetch: url => new Promise(resolve => { jobs.set(url, resolve) }),
+    UIImage: { fromData() {
+      now += 8
+      return {
+        width: 100, height: 100, scale: 1,
+        croppedTo() { now += 2; return null },
+      }
+    } },
+  })
+  const cache = new ReaderCache()
+  const requests = new ReaderRequests(cache, 7)
+  requests.prioritize(['/1', '/2', '/3', '/4'], ['/1'])
+  assert.equal(requests.imageTiming('/4').queuedAt, 100)
+  assert.equal(requests.imageTiming('/4').startedAt, undefined)
+
+  now = 135
+  jobs.get('/1')({ ok: true, data: async () => { now = 190; return {} } })
+  await settle()
+  assert.deepEqual({ ...requests.imageTiming('/1') }, {
+    queuedAt: 100, startedAt: 100, receivedAt: 190, finishedAt: 200, outcome: 'ready',
+  })
+  assert.equal(requests.imageTiming('/4').startedAt, 200)
+  requests.close()
+  assert.equal(requests.imageTiming('/1'), undefined)
+})
+
 test('cover queue is capped and discards pending work for an unseen cover', async () => {
   const jobs = []
   const { CoverCache } = load('ComicGrid.tsx', {}, {
