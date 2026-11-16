@@ -102,36 +102,15 @@ test('opening or dismissing the navigation preserves the loaded grid and its scr
   assert.equal(catalogRequests, 1)
   nav(updated).props.action()
   assert.equal(nav(updated).props.activeTab, "home")
-  updated.children.props.background.props.onTapGesture()
-  assert.equal(nav(updated).props.accessibilityLabel, '展开导航')
+  assert.equal(updated.children.props.background, undefined)
+  assert.equal(nav(updated).props.activeTab, "home")
 })
 
-test('catalog and history scroll views observe taps on their own blank space', () => {
-  const ui = {
-    ScrollView: 'ScrollView',
-    useObservable: value => ({ value }),
-    useRef: current => ({ current }),
-    useEffect() {},
-  }
-  const globals = { TapGesture: () => ({ onEnded: action => action }) }
-  const { ComicGrid } = load('ComicGrid.tsx', { scripting: ui }, globals)
-  const { ReadingHistoryView } = load('ReadingHistoryView.tsx', { scripting: ui }, globals)
-  let dismissals = 0
-  const onInteraction = () => { dismissals++ }
-  const catalog = ComicGrid({ onInteraction }).props
-  const history = ReadingHistoryView({ records: [], onInteraction }).props
-  catalog.simultaneousGesture()
-  history.simultaneousGesture()
-  assert.equal(dismissals, 2)
-  history.onScrollPhaseChange('idle', 'tracking')
-  assert.equal(dismissals, 3)
-})
-
-test('the login page dismisses the keyboard and navigation, and offers ordinary password input on demand', () => {
+test('login uses two regular text fields and tapping blank space only hides the keyboard', () => {
   const hooks = []
   let cursor = 0, hidden = 0, dismissed = 0
-  const ui = Object.fromEntries(['Button', 'GeometryReader', 'HStack', 'Image', 'Rectangle', 'ScrollView',
-    'SecureField', 'Text', 'TextField', 'VStack'].map(type => [type, type]))
+  const ui = Object.fromEntries(['Button', 'Divider', 'GeometryReader', 'HStack', 'Image', 'Rectangle',
+    'ScrollView', 'Text', 'TextField', 'VStack'].map(type => [type, type]))
   ui.useState = initial => {
     const index = cursor++
     if (!(index in hooks)) hooks[index] = initial
@@ -142,23 +121,26 @@ test('the login page dismisses the keyboard and navigation, and offers ordinary 
     cursor = 0
     return ProfileView({ onInteraction: () => { dismissed++ } }).props.children({ size: { height: 500 } }).props
   }
+  function textFields(view) {
+    if (Array.isArray(view)) return view.flatMap(textFields)
+    if (view?.type === 'TextField') return [view.props]
+    return view?.props?.children ? textFields(view.props.children) : []
+  }
   const scroll = page()
   const body = scroll.children.props
-  const [, account, password] = body.children.props.children
+  const fields = textFields(scroll.children)
+  assert.deepEqual(Array.from(fields, field => field.title), ['账号', '密码'])
+  assert.ok(fields.every(field => field.keyboardType === 'default'))
   assert.equal(body.frame.minHeight, 500)
-  assert.equal(account.props.keyboardType, 'default')
-  assert.equal(password.props.children[0].type, 'SecureField')
   body.background.props.onTapGesture()
   assert.equal(hidden, 1)
-  assert.equal(dismissed, 1)
-  account.props.onSubmit()
+  assert.equal(dismissed, 0)
+  fields[1].onChanged('example')
+  assert.equal(textFields(page().children)[1].value, 'example')
+  fields[1].onSubmit()
   assert.equal(hidden, 2)
-  password.props.children[0].props.onChanged('example')
-  password.props.children[1].props.action()
-  const visible = page().children.props.children.props.children[2].props.children[0]
-  assert.equal(visible.type, 'TextField')
-  assert.equal(visible.props.keyboardType, 'default')
-  assert.equal(visible.props.value, 'example')
+  scroll.onScrollPhaseChange('tracking', 'interacting')
+  assert.equal(dismissed, 1)
 })
 
 test('failed history read leaves previously saved history intact', () => {
