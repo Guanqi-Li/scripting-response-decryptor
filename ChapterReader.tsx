@@ -527,13 +527,14 @@ export function ChapterReader({ book, chapter, initialPage, opening, cache, dire
       ) : null}
       {controls.value ? (
         <VStack spacing={0} padding={16} frame={{ maxWidth: "infinity", maxHeight: "infinity" }}>
-          <HStack spacing={12} padding={12} background={{ style: "rgba(25,25,25,0.94)", shape: { type: "rect", cornerRadius: 18 } }}>
+          <HStack spacing={12} padding={{ horizontal: 12, vertical: 4 }}
+            background={{ style: "rgba(25,25,25,0.94)", shape: { type: "rect", cornerRadius: 18 } }}>
             <Button title="返回" systemImage="chevron.left" font="subheadline" action={close} />
             <Text font="subheadline" foregroundStyle="white" lineLimit={2}>{selected.value.title || chapterLabel(selected.value)}</Text>
             <Spacer />
             <Button title={imageTimings.value === null ? "测速" : "关闭"} systemImage="timer"
               accessibilityLabel={imageTimings.value === null ? "图片加载诊断" : "关闭图片加载诊断"}
-              font="subheadline" tint="white" frame={{ minHeight: 44 }} contentShape="rect"
+              font="subheadline" tint="white" frame={{ minHeight: 36 }} contentShape="rect"
               action={toggleImageTimings} />
           </HStack>
           {imageTimings.value !== null ? (

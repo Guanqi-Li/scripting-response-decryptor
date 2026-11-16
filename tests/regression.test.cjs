@@ -86,8 +86,13 @@ test('home recovers its initial category request and preserves the loaded grid w
   const main = () => render(root, mainHooks).props.children.props
   const nav = props => render(props.overlay.content, navHooks).props.children
   const grid = props => props.children.props.children[0].props.children[2]
-  main()
-  effects.shift()()
+  const launch = main()
+  const loadHome = effects.shift()
+  const launchNav = nav(launch)
+  assert.equal(launchNav.props.activeTab, 'home')
+  assert.equal(launchNav.type(launchNav.props).props.children[1].props.children.length, 3)
+  const disposeNav = effects.shift()()
+  loadHome()
   await settle()
   assert.equal(categoryRequests, 2)
   const failed = main().children.props.children[0].props.children[1]
@@ -104,7 +109,6 @@ test('home recovers its initial category request and preserves the loaded grid w
   const initialGrid = grid(initial)
   initialGrid.props.savePosition('7')
   const collapsed = nav(initial)
-  effects.shift()()
   assert.equal(collapsed.props.buttonStyle, 'glass')
   collapsed.props.action()
   const expanded = nav(initial)
@@ -124,6 +128,13 @@ test('home recovers its initial category request and preserves the loaded grid w
   assert.equal(nav(updated).props.activeTab, "home")
   assert.equal(updated.children.props.background, undefined)
   assert.equal(nav(updated).props.activeTab, "home")
+  grid(updated).props.openBook(book)
+  const detail = main()
+  assert.equal(detail.overlay, undefined)
+  disposeNav()
+  detail.navigationDestination.onChanged(false)
+  const returned = render(main().overlay.content, []).props.children
+  assert.equal(returned.props.accessibilityLabel, '展开导航')
 })
 
 test('login uses two regular text fields and tapping blank space only hides the keyboard', () => {
@@ -653,6 +664,8 @@ test('tapping the reader timing button opens and closes the inline diagnostic pa
   const timingButton = () => controls()[0].props.children.at(-1).props
   try {
     assert.equal(timingButton().title, '测速')
+    assert.equal(controls()[0].props.padding.vertical, 4)
+    assert.equal(timingButton().frame.minHeight, 36)
     timingButton().action()
     assert.equal(timingButton().title, '关闭')
     assert.match(controls()[1].props.children, /当前.*第 1 张/)

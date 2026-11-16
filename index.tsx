@@ -23,6 +23,7 @@ function MainView() {
   const [selectedBook, setSelectedBook] = useState<Comic | null>(null)
   const [activeTab, setActiveTab] = useState<MainTab>("home")
   const closeNavigation = useRef<(() => void) | null>(null)
+  const openedNavigationOnLaunch = useRef(false)
   const returningFromLogin = useRef(false)
   const [history, setHistory] = useState<ReadingRecord[]>([])
   const [historyError, setHistoryError] = useState("")
@@ -162,6 +163,7 @@ function MainView() {
         content: <MainNavigation
           activeTab={activeTab}
           closeAction={closeNavigation}
+          openedOnLaunch={openedNavigationOnLaunch}
           select={selectTab}
         />,
       } : undefined}

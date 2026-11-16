@@ -15,19 +15,21 @@ const edgeInset = 16
 type MainNavigationProps = {
   activeTab: MainTab
   closeAction: { current: (() => void) | null }
+  openedOnLaunch: { current: boolean }
   select: (tab: MainTab) => void
 }
 
-export function MainNavigation({ activeTab, closeAction, select }: MainNavigationProps) {
-  const expanded = useObservable(false)
+export function MainNavigation({ activeTab, closeAction, openedOnLaunch, select }: MainNavigationProps) {
+  const expanded = useObservable(!openedOnLaunch.current)
 
   useEffect(() => {
+    openedOnLaunch.current = true
     const close = () => changeExpanded(false)
     closeAction.current = close
     return () => {
       if (closeAction.current === close) closeAction.current = null
     }
-  }, [closeAction, expanded])
+  }, [closeAction, openedOnLaunch, expanded])
 
   function changeExpanded(next: boolean) {
     if (expanded.value === next) return
