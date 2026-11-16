@@ -1,5 +1,5 @@
 import {
-  Button, Image, LazyVGrid, ProgressView, RoundedRectangle, ScrollView, Text, VStack,
+  Button, Image, LazyVGrid, ProgressView, Rectangle, RoundedRectangle, ScrollView, Text, VStack,
   useEffect, useObservable, useRef, useState, type GridItem, type ScrollGeometry,
 } from "scripting"
 import type { Catalog, Comic } from "./catalog"
@@ -165,7 +165,7 @@ export function ComicGrid({ entry, covers, loadPage, openBook, initialPosition, 
   onInteraction: () => void
 }) {
   const position = useObservable<string | null>(initialPosition)
-  const drag = useRef<{ startDistance: number | null; hasDragged: boolean }>({ startDistance: null, hasDragged: false })
+  const scroll = useRef({ moved: false, requested: false, footerVisible: false, distance: Infinity })
   const data = entry?.data
   const hasMore = data !== undefined && data.page < data.totalPage
 
@@ -175,17 +175,16 @@ export function ComicGrid({ entry, covers, loadPage, openBook, initialPosition, 
     return () => position.unsubscribe(record)
   }, [savePosition])
 
-  function loadIfPulledPastBottom(distance: number) {
-    if (!hasMore || entry?.loading || entry?.error || drag.current.startDistance === null || distance >= -3) return
-    drag.current.startDistance = null
+  function loadIfAtBottom(atBottom: boolean) {
+    if (!atBottom || !hasMore || entry?.loading || entry?.error || !scroll.current.moved || scroll.current.requested) return
+    scroll.current.requested = true
     loadPage()
   }
 
   function checkDrag({ translation }: { translation: { width: number; height: number } }) {
-    const start = drag.current.startDistance
-    if (start !== null && -translation.height > Math.abs(translation.width)) {
-      loadIfPulledPastBottom(start + translation.height)
-    }
+    if (-translation.height <= Math.max(3, Math.abs(translation.width))) return
+    scroll.current.moved = true
+    loadIfAtBottom(scroll.current.footerVisible || scroll.current.distance <= 3)
   }
 
   return (
@@ -196,45 +195,59 @@ export function ComicGrid({ entry, covers, loadPage, openBook, initialPosition, 
         ? DragGesture({ minDistance: 3 }).onChanged(checkDrag).onEnded(checkDrag)
         : undefined}
       onScrollPhaseChange={(previous, next, { geometry }) => {
-        const distance = distanceFromBottom(geometry)
-        if (next === "tracking" || (next === "interacting" && previous !== "tracking")) {
-          drag.current.startDistance = distance <= 3 ? Math.max(0, distance) : null
-          drag.current.hasDragged = false
+        const state = scroll.current
+        state.distance = distanceFromBottom(geometry)
+        if (next === "tracking" || (next === "interacting" && previous !== "tracking") || next === "animating") {
+          state.moved = false
+          state.requested = false
         }
         if (next === "interacting") {
-          drag.current.hasDragged = true
+          state.moved = true
           onInteraction()
         }
-        // A quick pull can report its deepest offset at release, before the next geometry callback.
-        if (drag.current.hasDragged) loadIfPulledPastBottom(distance)
-        if (next === "idle" || next === "animating") drag.current.hasDragged = false
+        loadIfAtBottom(state.distance <= 3)
+        // The footer notification can arrive after the scroll phase has already become idle.
       }}
       onScrollGeometryChange={{
         of: "geometry",
-        onChanged: (previous, geometry) => {
-          if (drag.current.hasDragged) {
-            loadIfPulledPastBottom(Math.min(distanceFromBottom(previous), distanceFromBottom(geometry)))
-          }
+        onChanged: (_, geometry) => {
+          scroll.current.distance = distanceFromBottom(geometry)
+          loadIfAtBottom(scroll.current.distance <= 3)
         },
       }}
     >
-      <VStack spacing={14} padding={{ horizontal: 16, top: 12, bottom: 72 }}>
-        {data?.books.length ? (
-          <LazyVGrid columns={columns} spacing={14} scrollTargetLayout>
-            {data.books.map(book => (
-              <VStack key={String(book.bookID)} spacing={0}>
-                <ComicCard book={book} covers={covers} openBook={openBook} />
-              </VStack>
-            ))}
-          </LazyVGrid>
-        ) : data ? <Text>暂无漫画</Text> : null}
-        {entry?.loading ? <ProgressView /> : null}
-        {entry?.error ? (
-          <VStack spacing={6}>
-            <Text>漫画加载失败。{entry.error}</Text>
-            <Button title="重试" action={() => { onInteraction(); loadPage() }} />
-          </VStack>
-        ) : null}
+      <VStack spacing={0}>
+        <VStack spacing={14} padding={{ horizontal: 16, top: 12, bottom: 72 }}>
+          {data?.books.length ? (
+            <LazyVGrid columns={columns} spacing={14} scrollTargetLayout>
+              {data.books.map(book => (
+                <VStack key={String(book.bookID)} spacing={0}>
+                  <ComicCard book={book} covers={covers} openBook={openBook} />
+                </VStack>
+              ))}
+            </LazyVGrid>
+          ) : data ? <Text>暂无漫画</Text> : null}
+          {entry?.loading ? <ProgressView /> : null}
+          {entry?.error ? (
+            <VStack spacing={6}>
+              <Text>漫画加载失败。{entry.error}</Text>
+              <Button title="重试" action={() => { onInteraction(); loadPage() }} />
+            </VStack>
+          ) : null}
+        </VStack>
+        <Rectangle
+          fill="clear"
+          frame={{ height: 4 }}
+          allowsHitTesting={false}
+          accessibilityHidden
+          onScrollVisibilityChange={{
+            threshold: 0.75,
+            onChanged: visible => {
+              scroll.current.footerVisible = visible
+              loadIfAtBottom(visible)
+            },
+          }}
+        />
       </VStack>
     </ScrollView>
   )

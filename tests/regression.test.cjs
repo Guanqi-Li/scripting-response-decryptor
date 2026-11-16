@@ -272,7 +272,7 @@ test('a pending automatic refresh cannot overwrite a successful manual login', a
 
 function mountCatalogScroll() {
   const { ComicGrid } = load('ComicGrid.tsx', { scripting: {
-    ScrollView: 'ScrollView',
+    Rectangle: 'Rectangle', ScrollView: 'ScrollView',
     useObservable: value => ({ value }),
     useRef: current => ({ current }),
     useEffect() {},
@@ -299,47 +299,47 @@ function mountCatalogScroll() {
     offset: (oldY, newY) => scroll.onScrollGeometryChange.onChanged(geometry(oldY), geometry(newY)),
     move: (width, height) => scroll.simultaneousGesture.changed({ translation: { width, height } }),
     release: (width, height) => scroll.simultaneousGesture.ended({ translation: { width, height } }),
+    footer: visible => scroll.children.props.children[1].props.onScrollVisibilityChange.onChanged(visible),
     requests: () => requests,
   }
 }
 
-test('catalog pagination fires once when a drag from the bottom exceeds three points', () => {
+test('the first scroll to the end loads exactly one catalog page', () => {
   const scroll = mountCatalogScroll()
-  scroll.phase('idle', 'tracking', 250)
-  scroll.phase('tracking', 'interacting', 255)
-  scroll.offset(300, 304)
+  scroll.phase('idle', 'tracking', 200)
+  scroll.phase('tracking', 'interacting', 210)
+  scroll.offset(290, 296)
   assert.equal(scroll.requests(), 0)
-
-  scroll.phase('idle', 'tracking', 300)
-  scroll.phase('tracking', 'interacting', 300)
-  scroll.offset(300, 303)
-  assert.equal(scroll.requests(), 0)
-  scroll.offset(303, 303.1)
-  scroll.offset(303.1, 307)
+  scroll.offset(296, 297)
+  scroll.phase('interacting', 'decelerating', 301)
+  scroll.footer(true)
   assert.equal(scroll.requests(), 1)
 })
 
-test('a quick pull can load on release without a new tap or a geometry sample', () => {
+test('the footer can trigger pagination after the same scroll has already stopped', () => {
   const scroll = mountCatalogScroll()
+  scroll.footer(true)
+  assert.equal(scroll.requests(), 0)
+  scroll.footer(false)
+  scroll.phase('idle', 'tracking', 200)
+  scroll.phase('tracking', 'interacting', 250)
+  scroll.phase('interacting', 'idle', 296)
+  scroll.footer(true)
+  assert.equal(scroll.requests(), 1)
+})
+
+test('a pull at the end loads even when the native offset does not move', () => {
+  const scroll = mountCatalogScroll()
+  scroll.footer(true)
   scroll.phase('idle', 'tracking', 300)
   scroll.phase('tracking', 'idle', 300)
   assert.equal(scroll.requests(), 0)
   scroll.phase('idle', 'tracking', 300)
-  scroll.phase('tracking', 'interacting', 300)
-  scroll.phase('interacting', 'decelerating', 304)
-  scroll.offset(304, 300)
-  assert.equal(scroll.requests(), 1)
-})
-
-test('finger translation still triggers pagination if the scroll offset was clamped or coalesced', () => {
-  const scroll = mountCatalogScroll()
-  scroll.phase('idle', 'tracking', 300)
   scroll.move(8, -4)
-  scroll.move(0, -3)
   assert.equal(scroll.requests(), 0)
   scroll.release(0, -4)
   scroll.phase('tracking', 'interacting', 300)
-  scroll.phase('interacting', 'idle', 305)
+  scroll.phase('interacting', 'idle', 300)
   assert.equal(scroll.requests(), 1)
 })
 
