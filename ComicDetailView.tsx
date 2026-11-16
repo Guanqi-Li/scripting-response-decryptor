@@ -1,5 +1,5 @@
 import {
-  Button, Dialog, HStack, Navigation, ProgressView, ScrollView, Text, VStack,
+  Button, Dialog, HStack, Navigation, ScrollView, Text, VStack,
   useEffect, useRef, useState,
 } from "scripting"
 import { ComicCover, type CoverCache } from "./ComicGrid"
@@ -138,7 +138,7 @@ export function ComicDetailView({ book, covers, cache, directories, readerCache,
             <Text>详情加载失败。{error}</Text>
             <Button title="重试" action={loadDetails} />
           </VStack>
-        ) : detail ? null : <ProgressView />}
+        ) : null}
         <ChapterDirectoryView key={book.bookID} bookID={book.bookID} cache={directories}
           openChapter={chapter => { void openReader(chapter) }} onFirstChapter={setFirstChapter}
           onLatestChapter={setDirectoryLatest} selectedChapterID={progress?.chapter.id}

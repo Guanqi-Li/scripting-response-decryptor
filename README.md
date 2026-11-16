@@ -1,4 +1,4 @@
-# 爱漫画 · 1.9.5
+# 爱漫画 · 1.9.6
 
 Scripting 仓库导入地址：https://github.com/Guanqi-Li/scripting-response-decryptor
 
