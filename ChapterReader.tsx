@@ -3,7 +3,7 @@ import {
   ProgressView, Rectangle, ScrollView, Spacer, Text, VStack, ZStack, useEffect, useObservable, useRef,
 } from "scripting"
 import type { Chapter, Comic, ReaderChapter } from "./catalog"
-import { ChapterDirectoryRows } from "./ChapterDirectoryView"
+import { ChapterDirectoryView, type ChapterDirectoryCache } from "./ChapterDirectoryView"
 import { isTransientRequestError } from "./request"
 import { ReaderRequests, type ReaderCache } from "./reader-cache"
 import { chapterLabel, saveReadingRecord, type ReadingRecord } from "./reading-history"
@@ -60,8 +60,9 @@ function ReaderImageRow({ page, cache, requests, width, placeholderHeight, previ
   )
 }
 
-function ReaderDirectory({ chapters, chapterID, select }: {
-  chapters: Chapter[]
+function ReaderDirectory({ bookID, directoryCache, chapterID, select }: {
+  bookID: number
+  directoryCache: ChapterDirectoryCache
   chapterID: number
   select: (chapter: Chapter) => void
 }) {
@@ -76,7 +77,8 @@ function ReaderDirectory({ chapters, chapterID, select }: {
         toolbar={{ cancellationAction: <Button title="关闭" action={() => { dismiss() }} /> }}
       >
         <VStack padding={16}>
-          <ChapterDirectoryRows chapters={chapters} selectedChapterID={chapterID} openChapter={chapter => { select(chapter); dismiss() }} />
+          <ChapterDirectoryView bookID={bookID} cache={directoryCache} showHeading={false}
+            selectedChapterID={chapterID} openChapter={chapter => { select(chapter); dismiss() }} />
         </VStack>
       </ScrollView>
     </NavigationStack>
@@ -85,14 +87,14 @@ function ReaderDirectory({ chapters, chapterID, select }: {
 
 export type ReaderOpening = { data: ReaderChapter } | { error: unknown }
 
-export function ChapterReader({ book, chapter, initialPage, opening, cache, getChapters, getAdjacent,
+export function ChapterReader({ book, chapter, initialPage, opening, cache, directoryCache, getAdjacent,
   getMissingPage, reloadDirectoryPage }: {
   book: Comic
   chapter: Chapter
   initialPage: number
   opening: ReaderOpening
   cache: ReaderCache
-  getChapters: () => Chapter[]
+  directoryCache: ChapterDirectoryCache
   getAdjacent: (chapter: Chapter, direction: -1 | 1) => Chapter | undefined
   getMissingPage: (chapter: Chapter) => number | undefined
   reloadDirectoryPage: (page: number, signal: AbortSignal) => Promise<void>
@@ -364,7 +366,7 @@ export function ChapterReader({ book, chapter, initialPage, opening, cache, getC
     controls.setValue(false)
     let choice: Chapter | undefined
     try {
-      await Navigation.present({ element: <ReaderDirectory chapters={getChapters()} chapterID={selected.value.id} select={item => { choice = item }} /> })
+      await Navigation.present({ element: <ReaderDirectory bookID={book.bookID} directoryCache={directoryCache} chapterID={selected.value.id} select={item => { choice = item }} /> })
       if (choice && mounted.current) choose(choice)
     } catch {
       if (mounted.current) {

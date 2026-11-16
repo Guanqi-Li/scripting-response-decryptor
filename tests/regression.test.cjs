@@ -395,6 +395,44 @@ test('directory index exposes missing neighbors and accepts a single-page repair
   assert.equal(directory.getPendingNextPage(7, cache, first), undefined)
 })
 
+test('the detail and reader directories share an automatic full load and retry only missing pages', async () => {
+  let allowPages
+  const batch = new Promise(resolve => { allowPages = resolve })
+  let fail = true
+  const requests = []
+  const directory = load('ChapterDirectoryView.tsx', { './catalog': {
+    fetchChapterPage: async (_, page) => {
+      requests.push(page)
+      if (page > 1) await batch
+      if (page === 2 && fail) throw new Error('page failed')
+      return { totalPage: 4, chapters: [{ id: page, title: String(page), number: page }] }
+    },
+  } })
+  const cache = new Map()
+  const detail = directory.observeDirectoryLoad(7, cache, () => {})
+  await settle()
+  assert.deepEqual(requests, [1, 2, 3, 4])
+  assert.equal(directory.getChapters(7, cache).length, 1)
+  const snapshots = []
+  const reader = directory.observeDirectoryLoad(7, cache, () => {
+    snapshots.push(Array.from(directory.getChapters(7, cache), chapter => chapter.id))
+  })
+  assert.equal(reader.finished, detail.finished)
+  detail.release()
+  const failed = assert.rejects(reader.finished, /第 2 页/)
+  allowPages()
+  await failed
+  reader.release()
+  assert.deepEqual(snapshots, [[1, 3, 4]])
+
+  fail = false
+  const retry = directory.observeDirectoryLoad(7, cache, () => {})
+  await retry.finished
+  retry.release()
+  assert.deepEqual(requests, [1, 2, 3, 4, 2])
+  assert.deepEqual(Array.from(directory.getChapters(7, cache), chapter => chapter.id), [1, 2, 3, 4])
+})
+
 test('visible pages take one stale download slot, then retry transient prefetch once', async () => {
   const jobs = []
   const { ReaderCache, ReaderRequests } = load('reader-cache.ts', {}, {
@@ -481,7 +519,7 @@ function mountReader({ initialPage = 1, failure } = {}) {
     activeHooks = hooks
     props.length = 0
     return ChapterReader({ book, chapter: first, initialPage, opening: { data: { chapter: first, images } },
-      cache, getChapters: () => [first, second], getAdjacent: chapter => chapter.id === 1 ? second : undefined,
+      cache, directoryCache: new Map(), getAdjacent: chapter => chapter.id === 1 ? second : undefined,
       getMissingPage: () => undefined, reloadDirectoryPage: async () => {} })
   }
   view()

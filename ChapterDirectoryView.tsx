@@ -66,8 +66,87 @@ export async function readDirectoryPage(
     directory = { totalPage, pages: new Map(), chapters: [], index: new Map() }
     cache.set(bookID, directory)
   }
+  if (page === 1) directory.totalPage = totalPage
   directory.pages.set(page, chapters)
   updateDirectoryIndex(directory)
+}
+
+function missingDirectoryPages(directory: ChapterDirectory): number[] {
+  const pages: number[] = []
+  for (let page = 1; page <= Math.max(1, directory.totalPage); page++) {
+    if (!directory.pages.has(page)) pages.push(page)
+  }
+  return pages
+}
+
+type DirectoryLoad = {
+  controller: AbortController
+  observers: Set<() => void>
+  finished: Promise<void>
+}
+
+const directoryLoads = new WeakMap<ChapterDirectoryCache, Map<number, DirectoryLoad>>()
+
+async function loadAllPages(
+  bookID: number, cache: ChapterDirectoryCache, signal: AbortSignal, publish: () => void,
+) {
+  if (signal.aborted) return
+  if (!cache.get(bookID)?.pages.has(1)) {
+    await readDirectoryPage(bookID, cache, 1, signal)
+    if (signal.aborted) return
+    publish()
+  }
+
+  const directory = cache.get(bookID)
+  if (!directory) return
+  const pending = missingDirectoryPages(directory)
+  for (let offset = 0; offset < pending.length && !signal.aborted; offset += MAX_CONCURRENT_PAGES) {
+    const batch = pending.slice(offset, offset + MAX_CONCURRENT_PAGES).filter(page => !directory.pages.has(page))
+    const results = await Promise.allSettled(batch.map(page => fetchChapterPage(bookID, page, signal)))
+    if (signal.aborted) return
+    results.forEach((result, index) => {
+      if (result.status === "fulfilled") directory.pages.set(batch[index], result.value.chapters)
+    })
+    updateDirectoryIndex(directory)
+    publish()
+  }
+  if (signal.aborted) return
+  const remaining = missingDirectoryPages(directory)
+  if (remaining.length) throw new Error(`第 ${remaining.join("、")} 页加载失败。`)
+}
+
+export function observeDirectoryLoad(bookID: number, cache: ChapterDirectoryCache, publish: () => void) {
+  let byBook = directoryLoads.get(cache)
+  if (!byBook) {
+    byBook = new Map()
+    directoryLoads.set(cache, byBook)
+  }
+  const loads = byBook
+  let load = loads.get(bookID)
+  if (!load) {
+    const controller = new AbortController()
+    const observers = new Set<() => void>()
+    const finished = Promise.resolve().then(() =>
+      loadAllPages(bookID, cache, controller.signal, () => observers.forEach(update => update())),
+    ).finally(() => {
+      if (loads.get(bookID)?.controller === controller) loads.delete(bookID)
+    })
+    load = { controller, observers, finished }
+    loads.set(bookID, load)
+  }
+
+  const joined = load
+  joined.observers.add(publish)
+  return {
+    finished: joined.finished,
+    release() {
+      joined.observers.delete(publish)
+      if (joined.observers.size === 0 && loads.get(bookID) === joined) {
+        loads.delete(bookID)
+        joined.controller.abort()
+      }
+    },
+  }
 }
 
 export function ChapterDirectoryRows({ chapters, openChapter, selectedChapterID, openingChapterID }: {
@@ -96,20 +175,22 @@ export function ChapterDirectoryRows({ chapters, openChapter, selectedChapterID,
   )
 }
 
-export function ChapterDirectoryView({ bookID, cache, openChapter, onFirstChapter, onLatestChapter, selectedChapterID, openingChapterID, directoryRevision }: {
+export function ChapterDirectoryView({ bookID, cache, openChapter, onFirstChapter, onLatestChapter, selectedChapterID,
+  openingChapterID, directoryRevision = 0, showHeading = true }: {
   bookID: number
   cache: ChapterDirectoryCache
   openChapter: (chapter: Chapter) => void
-  onFirstChapter: (chapter: Chapter | null) => void
-  onLatestChapter: (number: number | null) => void
+  onFirstChapter?: (chapter: Chapter | null) => void
+  onLatestChapter?: (number: number | null) => void
   selectedChapterID?: number
   openingChapterID?: number | null
-  directoryRevision: number
+  directoryRevision?: number
+  showHeading?: boolean
 }) {
   const [chapters, setChapters] = useState(getChapters(bookID, cache))
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState("")
-  const active = useRef<AbortController | null>(null)
+  const active = useRef<ReturnType<typeof observeDirectoryLoad> | null>(null)
 
   useEffect(() => {
     publishDirectory()
@@ -118,7 +199,7 @@ export function ChapterDirectoryView({ bookID, cache, openChapter, onFirstChapte
   useEffect(() => {
     void loadDirectory()
     return () => {
-      active.current?.abort()
+      active.current?.release()
       active.current = null
     }
   }, [bookID])
@@ -127,59 +208,36 @@ export function ChapterDirectoryView({ bookID, cache, openChapter, onFirstChapte
     const directory = cache.get(bookID)
     if (!directory) return
     setChapters(directory.chapters)
-    onFirstChapter(directory.pages.get(1)?.[0] ?? null)
-    if (directory.pages.size >= Math.max(1, directory.totalPage)) {
+    onFirstChapter?.(directory.pages.get(1)?.[0] ?? null)
+    if (onLatestChapter && missingDirectoryPages(directory).length === 0) {
       onLatestChapter(directory.chapters[directory.chapters.length - 1]?.number ?? null)
     }
   }
 
   async function loadDirectory() {
     const cached = cache.get(bookID)
-    if (active.current || (cached && cached.pages.size >= Math.max(1, cached.totalPage))) return
+    if (active.current || (cached && missingDirectoryPages(cached).length === 0)) return
 
-    const controller = new AbortController()
-    active.current = controller
-    const { signal } = controller
+    const load = observeDirectoryLoad(bookID, cache, publishDirectory)
+    active.current = load
     setLoading(true)
     setError("")
     try {
-      if (!cached) {
-        await readDirectoryPage(bookID, cache, 1, signal)
-        if (signal.aborted) return
-        publishDirectory()
-      }
-      const directory = cache.get(bookID)!
-      const pending: number[] = []
-      for (let page = 2; page <= directory.totalPage; page++) {
-        if (!directory.pages.has(page)) pending.push(page)
-      }
-      const failed: number[] = []
-      for (let offset = 0; offset < pending.length && !signal.aborted; offset += MAX_CONCURRENT_PAGES) {
-        const batch = pending.slice(offset, offset + MAX_CONCURRENT_PAGES).filter(page => !directory.pages.has(page))
-        const results = await Promise.allSettled(batch.map(page => fetchChapterPage(bookID, page, signal)))
-        if (signal.aborted) return
-        results.forEach((result, index) => {
-          const page = batch[index]
-          if (result.status === "fulfilled") directory.pages.set(page, result.value.chapters)
-          else if (!directory.pages.has(page)) failed.push(page)
-        })
-        updateDirectoryIndex(directory)
-        publishDirectory()
-      }
-      if (failed.length) setError(`第 ${failed.join("、")} 页加载失败。`)
+      await load.finished
     } catch (cause) {
-      if (!signal.aborted) setError(cause instanceof Error ? cause.message : String(cause))
+      if (active.current === load) setError(cause instanceof Error ? cause.message : String(cause))
     } finally {
-      if (active.current === controller) {
+      load.release()
+      if (active.current === load) {
         active.current = null
-        if (!signal.aborted) setLoading(false)
+        setLoading(false)
       }
     }
   }
 
   return (
     <VStack alignment="leading" spacing={10} frame={{ maxWidth: "infinity", alignment: "leading" }}>
-      <Text font="headline">章节目录</Text>
+      {showHeading ? <Text font="headline">章节目录</Text> : null}
       {chapters.length > 0 ? (
         <ChapterDirectoryRows chapters={chapters} openChapter={openChapter} selectedChapterID={selectedChapterID} openingChapterID={openingChapterID} />
       ) : null}

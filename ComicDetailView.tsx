@@ -3,7 +3,7 @@ import {
   useEffect, useRef, useState,
 } from "scripting"
 import { ComicCover, type CoverCache } from "./ComicGrid"
-import { ChapterDirectoryView, getAdjacentChapter, getChapters, getPendingNextPage, readDirectoryPage, type ChapterDirectoryCache } from "./ChapterDirectoryView"
+import { ChapterDirectoryView, getAdjacentChapter, getPendingNextPage, readDirectoryPage, type ChapterDirectoryCache } from "./ChapterDirectoryView"
 import { fetchBookDetails, type Chapter, type Comic } from "./catalog"
 import { ChapterReader, type ReaderOpening } from "./ChapterReader"
 import { ReaderRequests, type ReaderCache } from "./reader-cache"
@@ -84,7 +84,7 @@ export function ComicDetailView({ book, covers, cache, directories, readerCache,
 
       await Navigation.present({
         element: <ChapterReader book={display} chapter={chapter} initialPage={page} opening={result} cache={readerCache}
-          getChapters={() => getChapters(book.bookID, directories)}
+          directoryCache={directories}
           getAdjacent={(current, direction) => getAdjacentChapter(book.bookID, directories, current, direction)}
           getMissingPage={current => getPendingNextPage(book.bookID, directories, current)}
           reloadDirectoryPage={async (page, signal) => {
