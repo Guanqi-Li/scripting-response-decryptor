@@ -191,7 +191,7 @@ export function ComicGrid({ entry, covers, loadPage, openBook, initialPosition, 
         of: "geometry",
         onChanged: (_, geometry) => {
           if (hasMore && !entry?.loading && !entry?.error && drag.current.startedAtBottom
-            && drag.current.interacting && distanceFromBottom(geometry) <= -12) {
+            && drag.current.interacting && distanceFromBottom(geometry) < -3) {
             drag.current.startedAtBottom = false
             loadPage()
           }
@@ -214,8 +214,6 @@ export function ComicGrid({ entry, covers, loadPage, openBook, initialPosition, 
             <Text>漫画加载失败。{entry.error}</Text>
             <Button title="重试" action={() => { onInteraction(); loadPage() }} />
           </VStack>
-        ) : hasMore && !entry?.loading ? (
-          <Button title="加载更多" action={() => { onInteraction(); loadPage() }} />
         ) : null}
       </VStack>
     </ScrollView>

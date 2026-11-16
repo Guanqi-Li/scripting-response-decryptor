@@ -270,6 +270,41 @@ test('a pending automatic refresh cannot overwrite a successful manual login', a
   assert.equal(login.readLogin().token, 'manual-token')
 })
 
+test('catalog pagination fires once when a drag from the bottom exceeds three points', () => {
+  const { ComicGrid } = load('ComicGrid.tsx', { scripting: {
+    ScrollView: 'ScrollView',
+    useObservable: value => ({ value }),
+    useRef: current => ({ current }),
+    useEffect() {},
+  } })
+  let requests = 0
+  const scroll = ComicGrid({
+    entry: { data: { page: 1, totalPage: 2, books: [] } },
+    loadPage: () => { requests++ },
+    onInteraction() {},
+  }).props
+  const geometry = y => ({
+    contentInsets: { top: 0, bottom: 0 },
+    contentSize: { height: 900 },
+    containerSize: { height: 600 },
+    contentOffset: { y },
+  })
+  const phase = (previous, next, y) => scroll.onScrollPhaseChange(previous, next, { geometry: geometry(y) })
+  const drag = y => scroll.onScrollGeometryChange.onChanged(null, geometry(y))
+  phase('idle', 'tracking', 250)
+  phase('tracking', 'interacting', 255)
+  drag(304)
+  assert.equal(requests, 0)
+
+  phase('idle', 'tracking', 300)
+  phase('tracking', 'interacting', 300)
+  drag(303)
+  assert.equal(requests, 0)
+  drag(303.1)
+  drag(307)
+  assert.equal(requests, 1)
+})
+
 test('failed history read leaves previously saved history intact', () => {
   const record = { book, chapter: first, page: 1, pageCount: 2, readAt: 1 }
   let value = [record], fail = true, writes = 0
