@@ -1,5 +1,5 @@
 import { requestAndDecrypt, SITE_ORIGIN } from "./request"
-import { withChapterToken } from "./login"
+import { requestWithSavedToken, withChapterToken } from "./login"
 const PAGE_SIZE = 15
 
 export type Category = { id: number; name: string }
@@ -65,7 +65,7 @@ function parseComic(value: unknown): Comic | null {
 }
 
 export async function fetchCategories(signal: AbortSignal): Promise<Category[]> {
-  const { value } = await requestAndDecrypt(SITE_ORIGIN + "/api/stacksCategories", "", signal)
+  const { value } = await requestWithSavedToken(SITE_ORIGIN + "/api/stacksCategories", signal)
   if (!Array.isArray(value) || !value.every(isCategory)) {
     throw new Error("解密后的分类数据格式有误。")
   }
@@ -78,7 +78,7 @@ export async function fetchCatalog(categoryID: number, page: number, signal: Abo
   url.searchParams.set("size", String(PAGE_SIZE))
   url.searchParams.set("page", String(page))
   url.searchParams.set("category", String(categoryID))
-  const { value } = await requestAndDecrypt(url.href, "", signal)
+  const { value } = await requestWithSavedToken(url.href, signal)
   if (!isRecord(value) || value.page !== page || !isID(value.totalPage) || !Array.isArray(value.list)) {
     throw new Error("解密后的漫画列表格式有误。")
   }
@@ -90,7 +90,7 @@ export async function fetchCatalog(categoryID: number, page: number, signal: Abo
 export async function fetchBookDetails(book: Comic, signal: AbortSignal): Promise<Comic> {
   const url = new URL("/api/bookDetails", SITE_ORIGIN)
   url.searchParams.set("book_id", String(book.bookID))
-  const { value } = await requestAndDecrypt(url.href, "", signal)
+  const { value } = await requestWithSavedToken(url.href, signal)
   if (!isRecord(value) || !isRecord(value.bookDetail) || value.bookDetail.id !== book.bookID) {
     throw new Error("解密后的漫画详情格式有误。")
   }
@@ -114,7 +114,7 @@ export async function fetchChapterPage(bookID: number, page: number, signal: Abo
   url.searchParams.set("page", String(page))
   url.searchParams.set("size", String(PAGE_SIZE))
   url.searchParams.set("book_id", String(bookID))
-  const { value } = await requestAndDecrypt(url.href, "", signal)
+  const { value } = await requestWithSavedToken(url.href, signal)
   if (!isRecord(value) || value.page !== page || !isID(value.totalPage) || !Array.isArray(value.list)) {
     throw new Error("解密后的章节目录格式有误。")
   }

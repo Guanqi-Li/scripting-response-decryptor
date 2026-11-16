@@ -28,6 +28,10 @@ function saveLogin(session: LoginSession) {
   revision++
 }
 
+export function requestWithSavedToken(input: string, signal: AbortSignal) {
+  return requestAndDecrypt(input, readLogin()?.token ?? "", signal)
+}
+
 async function requestToken({ username, password }: Credentials, signal: AbortSignal): Promise<string> {
   const { value } = await requestAndDecrypt(SITE_ORIGIN + "/api/newLogins", "", signal, { username, password, type: 0 })
   if (typeof value !== "object" || value === null || !("token" in value) || !isToken(value.token)) {

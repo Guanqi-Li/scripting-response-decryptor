@@ -190,6 +190,31 @@ test('manual login signs a JSON POST and immediately replaces the saved credenti
   assert.equal(login.readLogin().username, 'new-user')
 })
 
+test('all comic APIs send the saved token and login POSTs omit it', async () => {
+  const results = {
+    '/api/stacksCategories': [{ id: 0, name: '新作' }],
+    '/api/stacks': { page: 1, totalPage: 1, list: [] },
+    '/api/bookDetails': { bookDetail: { id: 7 } },
+    '/api/chaptersDirectories': { page: 1, totalPage: 1, list: [] },
+    '/api/chaptersDetails': { chapterDetail: { id: 1, book_id: 7, image_list: ['/1.jpg'] } },
+    '/api/newLogins': { token: 'saved-token' },
+  }
+  const { catalog, login, requests } = loginFixture((url, _, envelope) => envelope(results[url.pathname]), null)
+  const credentials = { username: 'fixture-user', password: 'fixture-password' }
+  await login.signIn(credentials, signal())
+  assert.equal(requests[0].headers.token, undefined)
+
+  await catalog.fetchCategories(signal())
+  await catalog.fetchCatalog(0, 1, signal())
+  await catalog.fetchBookDetails(book, signal())
+  await catalog.fetchChapterPage(7, 1, signal())
+  await catalog.fetchReaderChapter(7, first, signal())
+  await login.signIn(credentials, signal())
+  assert.deepEqual(requests.slice(1).map(item => new URL(item.url).pathname), Object.keys(results))
+  assert.ok(requests.slice(1, -1).every(item => item.headers.token === 'saved-token'))
+  assert.equal(requests.at(-1).headers.token, undefined)
+})
+
 test('concurrent chapter requests renew once, persisting only after a validated retry', async () => {
   let releaseRetry
   const waitForRetry = new Promise(resolve => { releaseRetry = resolve })
@@ -203,7 +228,9 @@ test('concurrent chapter requests renew once, persisting only after a validated 
   const secondRead = catalog.fetchReaderChapter(7, second, signal())
   await settle()
   assert.equal(login.readLogin().token, 'old-token')
-  assert.equal(requests.filter(item => item.method === 'POST').length, 1)
+  const renewals = requests.filter(item => item.method === 'POST')
+  assert.equal(renewals.length, 1)
+  assert.equal(renewals[0].headers.token, undefined)
   releaseRetry()
   await Promise.all([firstRead, secondRead])
   assert.equal(login.readLogin().token, 'renewed-token')
@@ -267,12 +294,10 @@ test('valid rows survive malformed data and image numbering is stable', async ()
     } } },
     '/api/chaptersDetails': { chapterDetail: { id: 1, book_id: 7, image_list: ['/1.jpg', null, '/3.jpg'] } },
   }
+  const response = async url => ({ value: data[new URL(url).pathname] })
   const catalog = load('catalog.ts', {
-    './request': {
-      SITE_ORIGIN: 'https://www.18akmanhua.com',
-      requestAndDecrypt: async url => ({ value: data[new URL(url).pathname] }),
-    },
-    './login': { withChapterToken: request => request('') },
+    './request': { SITE_ORIGIN: 'https://www.18akmanhua.com', requestAndDecrypt: response },
+    './login': { requestWithSavedToken: response, withChapterToken: request => request('') },
   })
   assert.equal((await catalog.fetchCatalog(0, 1, signal())).books.length, 1)
   assert.equal((await catalog.fetchChapterPage(7, 1, signal())).chapters[0].title, '第1话')
