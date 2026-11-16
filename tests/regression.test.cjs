@@ -433,6 +433,54 @@ test('the detail and reader directories share an automatic full load and retry o
   assert.deepEqual(Array.from(directory.getChapters(7, cache), chapter => chapter.id), [1, 2, 3, 4])
 })
 
+test('a 33-chapter directory publishes the whole list without showing page one on its own', async () => {
+  let release
+  const remaining = new Promise(resolve => { release = resolve })
+  const state = [], effects = [], requested = []
+  let cursor
+  const slot = initial => {
+    const index = cursor++
+    return index in state ? state[index] : state[index] = initial
+  }
+  const { ChapterDirectoryView } = load('ChapterDirectoryView.tsx', {
+    scripting: {
+      Text: 'Text', ProgressView: 'ProgressView', VStack: 'VStack',
+      useState(initial) { const entry = slot({ value: initial }); return [entry.value, value => { entry.value = value }] },
+      useEffect(effect) { effects.push(effect) },
+      useRef: current => slot({ current }),
+    },
+    './catalog': {
+      async fetchChapterPage(_, page) {
+        requested.push(page)
+        if (page > 1) await remaining
+        const chapters = Array.from({ length: page === 3 ? 3 : 15 }, (_, offset) => {
+          const id = (page - 1) * 15 + offset + 1
+          return { id, title: String(id), number: id }
+        })
+        return { totalPage: 3, chapters }
+      },
+    },
+  })
+  const cache = new Map()
+  function view() {
+    cursor = 0
+    return ChapterDirectoryView({ bookID: 7, cache, openChapter() {} }).props.children[1]
+  }
+  assert.equal(view().type, 'ProgressView')
+  const [publish, mount] = effects
+  publish()
+  const unmount = mount()
+  await settle()
+  assert.deepEqual(requested, [1, 2, 3])
+  assert.equal(cache.get(7).chapters.length, 15)
+  assert.equal(view().type, 'ProgressView')
+  release()
+  await settle()
+  assert.deepEqual(Array.from(view().props.chapters, chapter => chapter.id),
+    Array.from({ length: 33 }, (_, index) => index + 1))
+  unmount()
+})
+
 test('visible pages take one stale download slot, then retry transient prefetch once', async () => {
   const jobs = []
   const { ReaderCache, ReaderRequests } = load('reader-cache.ts', {}, {

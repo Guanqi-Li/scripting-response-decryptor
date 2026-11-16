@@ -187,8 +187,10 @@ export function ChapterDirectoryView({ bookID, cache, openChapter, onFirstChapte
   directoryRevision?: number
   showHeading?: boolean
 }) {
-  const [chapters, setChapters] = useState(getChapters(bookID, cache))
-  const [loading, setLoading] = useState(false)
+  const cached = cache.get(bookID)
+  const complete = cached && missingDirectoryPages(cached).length === 0
+  const [chapters, setChapters] = useState(complete ? cached.chapters : [])
+  const [loading, setLoading] = useState(!complete)
   const [error, setError] = useState("")
   const active = useRef<ReturnType<typeof observeDirectoryLoad> | null>(null)
 
@@ -207,11 +209,10 @@ export function ChapterDirectoryView({ bookID, cache, openChapter, onFirstChapte
   function publishDirectory() {
     const directory = cache.get(bookID)
     if (!directory) return
-    setChapters(directory.chapters)
     onFirstChapter?.(directory.pages.get(1)?.[0] ?? null)
-    if (onLatestChapter && missingDirectoryPages(directory).length === 0) {
-      onLatestChapter(directory.chapters[directory.chapters.length - 1]?.number ?? null)
-    }
+    if (missingDirectoryPages(directory).length !== 0) return
+    setChapters(directory.chapters)
+    onLatestChapter?.(directory.chapters[directory.chapters.length - 1]?.number ?? null)
   }
 
   async function loadDirectory() {
@@ -238,16 +239,14 @@ export function ChapterDirectoryView({ bookID, cache, openChapter, onFirstChapte
   return (
     <VStack alignment="leading" spacing={10} frame={{ maxWidth: "infinity", alignment: "leading" }}>
       {showHeading ? <Text font="headline">章节目录</Text> : null}
-      {chapters.length > 0 ? (
-        <ChapterDirectoryRows chapters={chapters} openChapter={openChapter} selectedChapterID={selectedChapterID} openingChapterID={openingChapterID} />
-      ) : null}
-      {loading ? <ProgressView /> : null}
-      {error ? (
+      {loading ? <ProgressView /> : error ? (
         <VStack alignment="leading" spacing={6}>
           <Text>{error}</Text>
           <Button title="重试目录" action={loadDirectory} />
         </VStack>
-      ) : !loading && chapters.length === 0 && cache.has(bookID) ? <Text>暂无章节</Text> : null}
+      ) : chapters.length > 0 ? (
+        <ChapterDirectoryRows chapters={chapters} openChapter={openChapter} selectedChapterID={selectedChapterID} openingChapterID={openingChapterID} />
+      ) : <Text>暂无章节</Text>}
     </VStack>
   )
 }
