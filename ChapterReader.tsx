@@ -1,5 +1,5 @@
 import {
-  Button, Dialog, GeometryReader, HStack, Image, LazyVStack, Navigation, NavigationStack,
+  Button, GeometryReader, HStack, Image, LazyVStack, Navigation, NavigationStack,
   ProgressView, Rectangle, ScrollView, Spacer, Text, VStack, ZStack, useEffect, useObservable, useRef,
 } from "scripting"
 import type { Chapter, Comic, ReaderChapter } from "./catalog"
@@ -126,6 +126,7 @@ export function ChapterReader({ book, chapter, initialPage, opening, cache, dire
   const selected = useObservable(initialTarget?.chapter ?? chapter)
   const position = useObservable<string | null>(initialTarget?.id ?? null)
   const controls = useObservable(false)
+  const imageTimings = useObservable<string | null>(null)
   const busy = useObservable(false)
   const error = useObservable("error" in opening
     ? openingError instanceof Error ? openingError.message : String(openingError)
@@ -267,10 +268,16 @@ export function ChapterReader({ book, chapter, initialPage, opening, cache, dire
     if (mounted.current && !target.current) confirmPage(id)
   }
 
+  function hideControlsLater() {
+    clearTimeout(hideTimer.current)
+    hideTimer.current = setTimeout(() => controls.setValue(false), 4500)
+  }
+
   function showControls() {
     controls.setValue(!controls.value)
-    clearTimeout(hideTimer.current)
-    if (controls.value) hideTimer.current = setTimeout(() => controls.setValue(false), 4500)
+    if (imageTimings.value !== null) imageTimings.setValue(null)
+    if (controls.value) hideControlsLater()
+    else clearTimeout(hideTimer.current)
   }
 
   function setChapterError(cause: unknown, kind: "open" | "append") {
@@ -375,20 +382,31 @@ export function ChapterReader({ book, chapter, initialPage, opening, cache, dire
     }
   }
 
-  async function showImageTimings() {
+  function imageTimingText() {
     const items = pages.value
     const currentID = target.current ?? activePage.current?.id ?? visible.current[0]
     const index = currentID ? pageIndex().get(currentID) ?? 0 : 0
     const now = Date.now()
-    const lines = items.slice(Math.max(0, index - 1), index + 3).map((page, offset) => {
+    const first = Math.max(0, index - 1)
+    const lines = items.slice(first, index + 3).map((page, offset) => {
       const timing = requests.imageTiming(page.url)
       const label = `${chapterLabel(page.chapter)} · 第 ${page.number} 张`
-      const isCurrent = Math.max(0, index - 1) + offset === index
+      const isCurrent = first + offset === index
       const detail = timing ? describeImageTiming(timing, now)
         : cache.images.has(page.url) ? "来自内存缓存" : page.url ? "尚未入队" : "图片地址无效"
       return `${isCurrent ? "当前 · " : ""}${label}\n${detail}`
     })
-    await Dialog.alert({ title: "图片加载诊断", message: lines.join("\n\n") || "本章还没有图片加载记录。" })
+    return lines.join("\n\n") || "本章还没有图片加载记录。"
+  }
+
+  function toggleImageTimings() {
+    if (imageTimings.value !== null) {
+      imageTimings.setValue(null)
+      hideControlsLater()
+    } else {
+      clearTimeout(hideTimer.current)
+      imageTimings.setValue(imageTimingText())
+    }
   }
 
   async function showDirectory() {
@@ -416,6 +434,7 @@ export function ChapterReader({ book, chapter, initialPage, opening, cache, dire
       const page = activePage.current
       if (page?.url === url && visible.current.includes(page.id)) recordVisiblePage(page)
       if (pages.value[pages.value.length - 1]?.url === url) maybeAppend()
+      if (controls.value && imageTimings.value !== null) imageTimings.setValue(imageTimingText())
     }
     position.subscribe(onPositionChanged)
     if (initialTarget) prioritize([initialTarget.id])
@@ -512,10 +531,17 @@ export function ChapterReader({ book, chapter, initialPage, opening, cache, dire
             <Button title="返回" systemImage="chevron.left" font="subheadline" action={close} />
             <Text font="subheadline" foregroundStyle="white" lineLimit={2}>{selected.value.title || chapterLabel(selected.value)}</Text>
             <Spacer />
-            <Button accessibilityLabel="图片加载诊断" tint="white" action={showImageTimings}>
-              <Image systemName="timer" font="body" />
-            </Button>
+            <Button title={imageTimings.value === null ? "测速" : "关闭"} systemImage="timer"
+              accessibilityLabel={imageTimings.value === null ? "图片加载诊断" : "关闭图片加载诊断"}
+              font="subheadline" tint="white" frame={{ minHeight: 44 }} contentShape="rect"
+              action={toggleImageTimings} />
           </HStack>
+          {imageTimings.value !== null ? (
+            <Text font="footnote" foregroundStyle="white" multilineTextAlignment="leading"
+              frame={{ maxWidth: "infinity", alignment: "leading" }} padding={12}
+              background={{ style: "rgba(25,25,25,0.94)", shape: { type: "rect", cornerRadius: 18 } }}
+            >{imageTimings.value}</Text>
+          ) : null}
           <Spacer />
           <HStack spacing={16} padding={12} background={{ style: "rgba(25,25,25,0.94)", shape: { type: "rect", cornerRadius: 18 } }}>
             <Button title="上一章" disabled={!previous || busy.value} action={() => { if (previous) choose(previous) }} />

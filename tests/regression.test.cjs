@@ -576,6 +576,7 @@ function mountReader({ initialPage = 1, failure } = {}) {
   class ReaderRequests {
     failed = new Set()
     prioritize(urls, visible) { jobs.push({ urls, visible }) }
+    imageTiming() { return undefined }
     async chapter(chapter) {
       if (failure) {
         const error = failure
@@ -589,7 +590,7 @@ function mountReader({ initialPage = 1, failure } = {}) {
   class ApiError extends Error {}
   const { ChapterReader } = load('ChapterReader.tsx', {
     scripting: ui, './reader-cache': { ReaderRequests }, './request': { ApiError, isTransientRequestError: () => false },
-    './reading-history': { saveReadingRecord: record => saved.push(record) },
+    './reading-history': { saveReadingRecord: record => saved.push(record), chapterLabel: chapter => chapter.title },
   })
   const images = Array.from({ length: 12 }, (_, i) => '/' + (i + 1))
   const cache = { images: new Map(images.map(url => [url, { image: {} }])), ratios: new Map() }
@@ -613,6 +614,23 @@ function mountReader({ initialPage = 1, failure } = {}) {
   }
   return { view, scroll, visible, tapImage, jobs, saved, cleanup }
 }
+
+test('tapping the reader timing button opens and closes the inline diagnostic panel', () => {
+  const reader = mountReader()
+  reader.tapImage()
+  const controls = () => reader.view().props.children[3].props.children
+  const timingButton = () => controls()[0].props.children.at(-1).props
+  try {
+    assert.equal(timingButton().title, '测速')
+    timingButton().action()
+    assert.equal(timingButton().title, '关闭')
+    assert.match(controls()[1].props.children, /当前.*第 1 张/)
+    timingButton().action()
+    assert.equal(controls()[1], null)
+  } finally {
+    reader.cleanup()
+  }
+})
 
 test('resume waits for confirmation without blocking downloads of actual visible pages', () => {
   const reader = mountReader({ initialPage: 9 })
@@ -640,7 +658,9 @@ test('manual chapter error leaves automatic append available for the current cha
   reader.visible(['1:1'])
   reader.tapImage()
   const controls = reader.view().props.children.at(-1)
-  controls.props.children[2].props.children[4].props.action()
+  const nextButton = controls.props.children.flatMap(row => row?.props.children ?? [])
+    .find(node => node?.props?.title === '下一章')
+  nextButton.props.action()
   await settle()
   assert.match(reader.view().props.children[2].props.children[0].props.children, /manual request failed/)
   reader.visible(['1:12', 'chapter-end:1:12'])
