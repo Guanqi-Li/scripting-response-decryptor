@@ -5,6 +5,8 @@ import {
 import { ComicGrid, CoverCache, type CatalogEntry } from "./ComicGrid"
 import { ComicDetailView } from "./ComicDetailView"
 import { ReadingHistoryView } from "./ReadingHistoryView"
+import { MainNavigation, type MainTab } from "./MainNavigation"
+import { ProfileView } from "./ProfileView"
 import { getReadingHistory, type ReadingRecord } from "./reading-history"
 import { ReaderCache } from "./reader-cache"
 import type { ChapterDirectoryCache } from "./ChapterDirectoryView"
@@ -18,7 +20,8 @@ function MainView() {
   const [selectedCategoryID, setSelectedCategoryID] = useState<number | null>(null)
   const [categoryError, setCategoryError] = useState("")
   const [selectedBook, setSelectedBook] = useState<Comic | null>(null)
-  const [showHistory, setShowHistory] = useState(false)
+  const [activeTab, setActiveTab] = useState<MainTab>("home")
+  const [navigationExpanded, setNavigationExpanded] = useState(false)
   const [history, setHistory] = useState<ReadingRecord[]>([])
   const [historyError, setHistoryError] = useState("")
   const categoryPositions = useRef(new Map<number, string>())
@@ -105,30 +108,39 @@ function MainView() {
     }
   }
 
+  function selectTab(tab: MainTab) {
+    if (tab === "history") refreshHistory()
+    setActiveTab(tab)
+    setNavigationExpanded(false)
+  }
+
+  function openBook(book: Comic) {
+    setNavigationExpanded(false)
+    setSelectedBook(book)
+  }
+
   function exit() {
     cancelRequests()
     Script.exit()
   }
 
+  const isHome = activeTab === "home"
+  const title = isHome ? "爱漫画" : activeTab === "history" ? "观看历史" : "我的"
+
   return <NavigationStack>
     <VStack
       padding={{ top: 16 }}
       spacing={0}
-      navigationTitle={showHistory ? "观看历史" : "爱漫画"}
+      navigationTitle={title}
       overlay={selectedBook === null ? {
-        alignment: "bottomTrailing",
-        content: (
-          <Button
-            buttonStyle="glass"
-            buttonBorderShape="circle"
-            padding={{ trailing: 16, bottom: 12 }}
-            accessibilityLabel={showHistory ? "回到首页" : "观看历史"}
-            action={() => { if (!showHistory) refreshHistory(); setShowHistory(!showHistory) }}
-          >
-            <Image systemName={showHistory ? "house" : "clock.arrow.circlepath"} font="title3"
-              frame={{ width: 36, height: 36 }} />
-          </Button>
-        ),
+        alignment: navigationExpanded ? "bottom" : "bottomTrailing",
+        content: <MainNavigation
+          activeTab={activeTab}
+          expanded={navigationExpanded}
+          expand={() => setNavigationExpanded(true)}
+          dismiss={() => setNavigationExpanded(false)}
+          select={selectTab}
+        />,
       } : undefined}
       navigationBarTitleDisplayMode="inline"
       navigationDestination={{
@@ -152,14 +164,17 @@ function MainView() {
           <Image systemName="xmark" />
         </Button>,
         topBarTrailing: Script.supportsMinimization() ? (
-          <Button accessibilityLabel="最小化" action={async () => { await Script.minimize() }}>
+          <Button accessibilityLabel="最小化" action={async () => {
+            setNavigationExpanded(false)
+            await Script.minimize()
+          }}>
             <Image systemName="minus" />
           </Button>
         ) : undefined,
       }}
     >
       <ZStack frame={{ maxWidth: "infinity", maxHeight: "infinity", alignment: "top" }}>
-        <VStack spacing={0} opacity={showHistory ? 0 : 1} disabled={showHistory} accessibilityHidden={showHistory}>
+        <VStack spacing={0} opacity={isHome ? 1 : 0} allowsHitTesting={isHome} accessibilityHidden={!isHome}>
           {categories?.length ? <ScrollView axes="horizontal" scrollIndicator="hidden" fixedSize={{ horizontal: false, vertical: true }}>
             <HStack spacing={28} padding={{ horizontal: 16 }}>
               {categories.map(category => {
@@ -206,12 +221,15 @@ function MainView() {
               savePosition={id => categoryPositions.current.set(selectedCategoryID, id)}
               entry={entries[selectedCategoryID]}
               covers={covers}
-              openBook={setSelectedBook}
+              openBook={openBook}
               loadPage={() => { void loadPage(selectedCategoryID) }}
             />
           ) : null}
         </VStack>
-        {showHistory ? <ReadingHistoryView records={history} error={historyError} retry={refreshHistory} covers={covers} openBook={setSelectedBook} /> : null}
+        {activeTab === "history" ? (
+          <ReadingHistoryView records={history} error={historyError} retry={refreshHistory} covers={covers} openBook={openBook} />
+        ) : null}
+        {activeTab === "profile" ? <ProfileView /> : null}
       </ZStack>
     </VStack>
   </NavigationStack>
