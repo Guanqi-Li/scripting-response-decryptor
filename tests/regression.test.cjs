@@ -51,6 +51,7 @@ test('opening or dismissing the navigation preserves the loaded grid and its scr
     Script: { supportsMinimization: () => false, exit() {} },
     useState(initial) { const entry = slot({ value: initial }); return [entry.value, value => { entry.value = value }] },
     useRef: value => slot({ current: value }),
+    useObservable: value => slot({ value, setValue(next) { this.value = next } }),
     useEffect(effect) {
       const entry = slot({ ran: false })
       if (entry.ran) return
@@ -74,7 +75,7 @@ test('opening or dismissing the navigation preserves the loaded grid and its scr
   })
   const render = (component, state) => { hooks = state; cursor = 0; return component.type(component.props) }
   const main = () => render(root, mainHooks).props.children.props
-  const nav = props => render(props.overlay.content, navHooks).props
+  const nav = props => render(props.overlay.content, navHooks).props.children
   const grid = props => props.children.props.children[0].props.children[2]
   main()
   effects.shift()()
@@ -84,23 +85,59 @@ test('opening or dismissing the navigation preserves the loaded grid and its scr
   initialGrid.props.savePosition('7')
   const collapsed = nav(initial)
   effects.shift()()
-  assert.equal(collapsed.buttonStyle, 'glass')
-  collapsed.action()
+  assert.equal(collapsed.props.buttonStyle, 'glass')
+  collapsed.props.action()
   const expanded = nav(initial)
-  assert.equal(expanded.frame.height, 52)
-  assert.equal(expanded.children[1].props.children.length, 3)
+  const bar = expanded.type(expanded.props).props
+  assert.equal(bar.frame.height, 52)
+  assert.equal(bar.children[1].props.children.length, 3)
+  assert.ok(bar.children[0].props.frame.width * 3 > 288)
   assert.equal(grid(main()).props.entry, initialGrid.props.entry)
   initialGrid.props.onInteraction()
   const updated = main()
-  assert.equal(nav(updated).accessibilityLabel, '展开导航')
+  assert.equal(nav(updated).props.accessibilityLabel, '展开导航')
   assert.equal(grid(updated).key, initialGrid.key)
   assert.equal(grid(updated).props.entry, initialGrid.props.entry)
   assert.equal(grid(updated).props.initialPosition, '7')
   assert.equal(catalogRequests, 1)
-  nav(updated).action()
-  assert.equal(nav(updated).frame.height, 52)
+  nav(updated).props.action()
+  assert.equal(nav(updated).props.activeTab, "home")
   updated.children.props.background.props.onTapGesture()
-  assert.equal(nav(updated).accessibilityLabel, '展开导航')
+  assert.equal(nav(updated).props.accessibilityLabel, '展开导航')
+})
+
+test('the login page dismisses the keyboard and navigation, and offers ordinary password input on demand', () => {
+  const hooks = []
+  let cursor = 0, hidden = 0, dismissed = 0
+  const ui = Object.fromEntries(['Button', 'GeometryReader', 'HStack', 'Image', 'Rectangle', 'ScrollView',
+    'SecureField', 'Text', 'TextField', 'VStack'].map(type => [type, type]))
+  ui.useState = initial => {
+    const index = cursor++
+    if (!(index in hooks)) hooks[index] = initial
+    return [hooks[index], value => { hooks[index] = value }]
+  }
+  const { ProfileView } = load('ProfileView.tsx', { scripting: ui }, { Keyboard: { hide() { hidden++ } } })
+  function page() {
+    cursor = 0
+    return ProfileView({ onInteraction: () => { dismissed++ } }).props.children({ size: { height: 500 } }).props
+  }
+  const scroll = page()
+  const body = scroll.children.props
+  const [, account, password] = body.children.props.children
+  assert.equal(body.frame.minHeight, 500)
+  assert.equal(account.props.keyboardType, 'default')
+  assert.equal(password.props.children[0].type, 'SecureField')
+  body.background.props.onTapGesture()
+  assert.equal(hidden, 1)
+  assert.equal(dismissed, 1)
+  account.props.onSubmit()
+  assert.equal(hidden, 2)
+  password.props.children[0].props.onChanged('example')
+  password.props.children[1].props.action()
+  const visible = page().children.props.children.props.children[2].props.children[0]
+  assert.equal(visible.type, 'TextField')
+  assert.equal(visible.props.keyboardType, 'default')
+  assert.equal(visible.props.value, 'example')
 })
 
 test('failed history read leaves previously saved history intact', () => {

@@ -1,4 +1,4 @@
-import { Button, Capsule, HStack, Image, Text, VStack, ZStack, useEffect, useRef, useState } from "scripting"
+import { Button, Capsule, HStack, Image, Text, VStack, ZStack, useEffect, useObservable } from "scripting"
 
 export type MainTab = "home" | "history" | "profile"
 
@@ -10,7 +10,7 @@ const tabs = [
 
 const height = 52
 const tabInset = 4
-const tabWidth = (288 - tabInset * 2) / tabs.length
+const edgeInset = 16
 
 type MainNavigationProps = {
   activeTab: MainTab
@@ -19,34 +19,47 @@ type MainNavigationProps = {
 }
 
 export function MainNavigation({ activeTab, closeAction, select }: MainNavigationProps) {
-  const [expanded, setExpanded] = useState(false)
-  const expandedRef = useRef(false)
+  const expanded = useObservable(false)
 
   useEffect(() => {
-    const close = () => {
-      if (!expandedRef.current) return
-      expandedRef.current = false
-      setExpanded(false)
-    }
+    const close = () => changeExpanded(false)
     closeAction.current = close
     return () => {
       if (closeAction.current === close) closeAction.current = null
     }
-  }, [closeAction])
+  }, [closeAction, expanded])
 
-  if (!expanded) return (
-    <Button buttonStyle="glass" buttonBorderShape="circle"
-      padding={{ trailing: 16, bottom: 12 }}
-      accessibilityLabel="展开导航"
-      action={() => {
-        expandedRef.current = true
-        setExpanded(true)
-      }}
-    >
-      <Image systemName="line.3.horizontal" font="title3" frame={{ width: 36, height: 36 }} />
-    </Button>
+  function changeExpanded(next: boolean) {
+    if (expanded.value === next) return
+    const update = () => expanded.setValue(next)
+    if (typeof withAnimation === "function" && typeof Animation !== "undefined" && typeof Animation.easeOut === "function") {
+      void withAnimation(Animation.easeOut(0.27), update)
+    } else {
+      update()
+    }
+  }
+
+  return (
+    <ZStack alignment="trailing" padding={{ trailing: edgeInset, bottom: 12 }}>
+      {expanded.value ? <NavigationTabs activeTab={activeTab} select={select} /> : (
+        <Button buttonStyle="glass" buttonBorderShape="circle"
+          accessibilityLabel="展开导航"
+          action={() => changeExpanded(true)}
+        >
+          <Image systemName="line.3.horizontal" font="title3" frame={{ width: 36, height: 36 }} />
+        </Button>
+      )}
+    </ZStack>
   )
+}
 
+function NavigationTabs({ activeTab, select }: Pick<MainNavigationProps, "activeTab" | "select">) {
+  const screenWidth = typeof Device !== "undefined" ? Device.screen?.width : undefined
+  const width = Math.min(460, (screenWidth ?? 375) - edgeInset * 2)
+  const tabWidth = (width - tabInset * 2) / tabs.length
+  const panelTransition = typeof Transition !== "undefined" && typeof Transition.scale === "function"
+    ? Transition.scale(height / width, { x: 1 - height / (2 * width), y: 0.5 }).combined(Transition.opacity())
+    : undefined
   const selectedIndex = tabs.findIndex(tab => tab.id === activeTab)
   const selectionAnimation = typeof Animation !== "undefined" && typeof Animation.easeOut === "function"
     ? { animation: Animation.easeOut(0.24), value: activeTab }
@@ -55,7 +68,7 @@ export function MainNavigation({ activeTab, closeAction, select }: MainNavigatio
     <ZStack alignment="leading"
       frame={{ height }}
       glassEffect
-      padding={{ trailing: 16, bottom: 12 }}
+      transition={panelTransition}
     >
       <Capsule
         fill="tertiarySystemFill"
