@@ -155,13 +155,14 @@ function distanceFromBottom(geometry: ScrollGeometry): number {
   return bottom - geometry.contentOffset.y
 }
 
-export function ComicGrid({ entry, covers, loadPage, openBook, initialPosition, savePosition }: {
+export function ComicGrid({ entry, covers, loadPage, openBook, initialPosition, savePosition, onInteraction }: {
   entry?: CatalogEntry
   covers: CoverCache
   loadPage: () => void
   openBook: (book: Comic) => void
   initialPosition: string | null
   savePosition: (id: string) => void
+  onInteraction: () => void
 }) {
   const position = useObservable<string | null>(initialPosition)
   const drag = useRef({ startedAtBottom: false, interacting: false })
@@ -183,6 +184,7 @@ export function ComicGrid({ entry, covers, loadPage, openBook, initialPosition, 
           drag.current.startedAtBottom = distanceFromBottom(geometry) <= 3
         }
         drag.current.interacting = next === "interacting"
+        if (drag.current.interacting) onInteraction()
       }}
       onScrollGeometryChange={{
         of: "geometry",
@@ -209,10 +211,10 @@ export function ComicGrid({ entry, covers, loadPage, openBook, initialPosition, 
         {entry?.error ? (
           <VStack spacing={6}>
             <Text>漫画加载失败。{entry.error}</Text>
-            <Button title="重试" action={loadPage} />
+            <Button title="重试" action={() => { onInteraction(); loadPage() }} />
           </VStack>
         ) : hasMore && !entry?.loading ? (
-          <Button title="加载更多" action={loadPage} />
+          <Button title="加载更多" action={() => { onInteraction(); loadPage() }} />
         ) : null}
       </VStack>
     </ScrollView>

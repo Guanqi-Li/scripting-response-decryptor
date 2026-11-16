@@ -1,11 +1,15 @@
 import { Button, ScrollView, SecureField, Text, TextField, VStack, useState } from "scripting"
 
-export function ProfileView() {
+export function ProfileView({ onInteraction }: { onInteraction: () => void }) {
   const [account, setAccount] = useState("")
   const [password, setPassword] = useState("")
 
   return (
-    <ScrollView frame={{ maxWidth: "infinity", maxHeight: "infinity" }}>
+    <ScrollView
+      frame={{ maxWidth: "infinity", maxHeight: "infinity" }}
+      scrollBounceBehavior="always"
+      onScrollPhaseChange={(_, phase) => { if (phase === "interacting") onInteraction() }}
+    >
       <VStack spacing={16} padding={{ horizontal: 20, top: 20, bottom: 80 }} frame={{ maxWidth: "infinity" }}>
         <VStack spacing={12} frame={{ maxWidth: 420 }}>
           <Text font="title2" fontWeight="semibold" frame={{ maxWidth: "infinity", alignment: "leading" }}>
@@ -17,12 +21,14 @@ export function ProfileView() {
             onChanged={setAccount}
             textInputAutocapitalization="never"
             autocorrectionDisabled
+            onFocus={onInteraction}
             textFieldStyle="roundedBorder"
           />
           <SecureField
             title="密码"
             value={password}
             onChanged={setPassword}
+            onFocus={onInteraction}
             textFieldStyle="roundedBorder"
           />
           <Button buttonStyle="borderedProminent" disabled action={() => {}}>

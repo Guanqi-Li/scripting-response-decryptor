@@ -111,11 +111,14 @@ function MainView() {
   function selectTab(tab: MainTab) {
     if (tab === "history") refreshHistory()
     setActiveTab(tab)
+  }
+
+  function dismissNavigation() {
     setNavigationExpanded(false)
   }
 
   function openBook(book: Comic) {
-    setNavigationExpanded(false)
+    dismissNavigation()
     setSelectedBook(book)
   }
 
@@ -133,12 +136,11 @@ function MainView() {
       spacing={0}
       navigationTitle={title}
       overlay={selectedBook === null ? {
-        alignment: navigationExpanded ? "bottom" : "bottomTrailing",
+        alignment: "bottomTrailing",
         content: <MainNavigation
           activeTab={activeTab}
           expanded={navigationExpanded}
           expand={() => setNavigationExpanded(true)}
-          dismiss={() => setNavigationExpanded(false)}
           select={selectTab}
         />,
       } : undefined}
@@ -165,7 +167,7 @@ function MainView() {
         </Button>,
         topBarTrailing: Script.supportsMinimization() ? (
           <Button accessibilityLabel="最小化" action={async () => {
-            setNavigationExpanded(false)
+            dismissNavigation()
             await Script.minimize()
           }}>
             <Image systemName="minus" />
@@ -173,9 +175,18 @@ function MainView() {
         ) : undefined,
       }}
     >
-      <ZStack frame={{ maxWidth: "infinity", maxHeight: "infinity", alignment: "top" }}>
+      <ZStack
+        frame={{ maxWidth: "infinity", maxHeight: "infinity", alignment: "top" }}
+        contentShape="rect"
+        simultaneousGesture={navigationExpanded ? TapGesture().onEnded(dismissNavigation) : undefined}
+      >
         <VStack spacing={0} opacity={isHome ? 1 : 0} allowsHitTesting={isHome} accessibilityHidden={!isHome}>
-          {categories?.length ? <ScrollView axes="horizontal" scrollIndicator="hidden" fixedSize={{ horizontal: false, vertical: true }}>
+          {categories?.length ? <ScrollView
+            axes="horizontal"
+            scrollIndicator="hidden"
+            fixedSize={{ horizontal: false, vertical: true }}
+            onScrollPhaseChange={(_, phase) => { if (phase === "interacting") dismissNavigation() }}
+          >
             <HStack spacing={28} padding={{ horizontal: 16 }}>
               {categories.map(category => {
                 const selected = category.id === selectedCategoryID
@@ -184,7 +195,7 @@ function MainView() {
                     key={category.id}
                     buttonStyle="plain"
                     accessibilityAddTraits={selected ? "isSelected" : undefined}
-                    action={() => selectCategory(category.id)}
+                    action={() => { dismissNavigation(); selectCategory(category.id) }}
                   >
                     <VStack
                       frame={{ minHeight: 44 }}
@@ -211,7 +222,7 @@ function MainView() {
           {categoryError ? (
             <VStack spacing={6} padding={{ horizontal: 16, vertical: 8 }}>
               <Text>分类加载失败。{categoryError}</Text>
-              <Button title="重新加载分类" action={loadCategories} />
+              <Button title="重新加载分类" action={() => { dismissNavigation(); void loadCategories() }} />
             </VStack>
           ) : null}
           {selectedCategoryID !== null ? (
@@ -222,14 +233,16 @@ function MainView() {
               entry={entries[selectedCategoryID]}
               covers={covers}
               openBook={openBook}
+              onInteraction={dismissNavigation}
               loadPage={() => { void loadPage(selectedCategoryID) }}
             />
           ) : null}
         </VStack>
         {activeTab === "history" ? (
-          <ReadingHistoryView records={history} error={historyError} retry={refreshHistory} covers={covers} openBook={openBook} />
+          <ReadingHistoryView records={history} error={historyError} retry={refreshHistory} covers={covers}
+            openBook={openBook} onInteraction={dismissNavigation} />
         ) : null}
-        {activeTab === "profile" ? <ProfileView /> : null}
+        {activeTab === "profile" ? <ProfileView onInteraction={dismissNavigation} /> : null}
       </ZStack>
     </VStack>
   </NavigationStack>

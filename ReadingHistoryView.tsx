@@ -3,18 +3,22 @@ import { ComicCover, type CoverCache } from "./ComicGrid"
 import type { Comic } from "./catalog"
 import { chapterLabel, type ReadingRecord } from "./reading-history"
 
-export function ReadingHistoryView({ records, error, retry, covers, openBook }: {
+export function ReadingHistoryView({ records, error, retry, covers, openBook, onInteraction }: {
   records: ReadingRecord[]
   error: string
   retry: () => void
   covers: CoverCache
   openBook: (book: Comic) => void
+  onInteraction: () => void
 }) {
   return (
-    <ScrollView>
+    <ScrollView
+      scrollBounceBehavior="always"
+      onScrollPhaseChange={(_, phase) => { if (phase === "interacting") onInteraction() }}
+    >
       <LazyVStack alignment="leading" spacing={0} padding={{ horizontal: 16, bottom: 80 }}>
         {error ? <VStack alignment="leading" spacing={6}>
-          <Text>{error}</Text><Button title="重试" action={retry} />
+          <Text>{error}</Text><Button title="重试" action={() => { onInteraction(); retry() }} />
         </VStack> : !records.length ? <Text foregroundStyle="secondaryLabel">暂无观看历史</Text> : null}
         {records.map((record, index) => (
           <VStack key={record.book.bookID} alignment="leading" spacing={0}>
