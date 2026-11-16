@@ -1,8 +1,48 @@
-import { Button, Divider, GeometryReader, HStack, Image, Rectangle, ScrollView, Text, TextField, VStack, useState } from "scripting"
+import { Button, Divider, GeometryReader, HStack, Image, Rectangle, ScrollView, Text, TextField, VStack, useEffect, useRef, useState } from "scripting"
+import { readLogin, signIn } from "./login"
 
 export function ProfileView({ onInteraction }: { onInteraction: () => void }) {
   const [account, setAccount] = useState("")
   const [password, setPassword] = useState("")
+  const [loggedIn, setLoggedIn] = useState(false)
+  const [pending, setPending] = useState(false)
+  const [error, setError] = useState("")
+  const request = useRef<AbortController | null>(null)
+
+  useEffect(() => {
+    try {
+      const saved = readLogin()
+      if (saved) {
+        setAccount(saved.username)
+        setPassword(saved.password)
+        setLoggedIn(true)
+      }
+    } catch {
+      setError("无法读取本机登录信息。")
+    }
+    return () => { request.current?.abort() }
+  }, [])
+
+  const canSignIn = !pending && account.trim() !== "" && password !== ""
+
+  async function submit() {
+    if (!canSignIn || request.current) return
+    const controller = new AbortController()
+    request.current = controller
+    setPending(true)
+    setError("")
+    onInteraction()
+    dismissKeyboard()
+    try {
+      await signIn({ username: account.trim(), password }, controller.signal)
+      if (!controller.signal.aborted) setLoggedIn(true)
+    } catch (error) {
+      if (!controller.signal.aborted) setError(error instanceof Error ? error.message : "登录失败，请重试。")
+    } finally {
+      request.current = null
+      if (!controller.signal.aborted) setPending(false)
+    }
+  }
 
   function dismissKeyboard() {
     if (typeof Keyboard !== "undefined") Keyboard.hide()
@@ -55,6 +95,7 @@ export function ProfileView({ onInteraction }: { onInteraction: () => void }) {
                         textInputAutocapitalization="never"
                         autocorrectionDisabled
                         textFieldStyle="plain"
+                        disabled={pending}
                         onFocus={onInteraction}
                         onSubmit={dismissKeyboard}
                         submitLabel="done"
@@ -64,16 +105,17 @@ export function ProfileView({ onInteraction }: { onInteraction: () => void }) {
                 ))}
               </VStack>
               <VStack spacing={8}>
-                <Button disabled buttonStyle="plain" action={() => {}}>
+                <Button disabled={!canSignIn} buttonStyle="plain" action={submit}>
                   <Text fontWeight="semibold"
                     frame={{ maxWidth: "infinity", minHeight: 48 }}
-                    foregroundStyle="secondaryLabel"
-                    background={{ style: "tertiarySystemFill", shape: { type: "rect", cornerRadius: 14 } }}
+                    foregroundStyle={canSignIn ? "white" : "secondaryLabel"}
+                    background={{ style: canSignIn ? "systemBlue" : "tertiarySystemFill", shape: { type: "rect", cornerRadius: 14 } }}
                   >
-                    登录
+                    {pending ? "登录中…" : loggedIn ? "重新登录" : "登录"}
                   </Text>
                 </Button>
-                <Text font="footnote" foregroundStyle="secondaryLabel">登录暂未开放</Text>
+                {error ? <Text font="footnote" foregroundStyle="systemRed">{error}</Text> :
+                  loggedIn ? <Text font="footnote" foregroundStyle="secondaryLabel">已保存登录信息</Text> : null}
               </VStack>
             </VStack>
           </VStack>

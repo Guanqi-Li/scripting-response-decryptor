@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto"
 import { decryptResponse } from "./decrypt"
 
+export const SITE_ORIGIN = "https://www.18akmanhua.com"
 export const SECRET = "6F7A4DF7000C045C636B9123B11E4EC7"
 
 export function parseApiURL(input: string): { url: string, apiPath: string } {
@@ -32,6 +33,12 @@ export class ApiError extends Error {
 
 class NetworkError extends Error {}
 
+const TOKEN_REJECTED = /token\s*(?:已?失效|已?过期|无效|不存在)|(?:invalid|expired)\s+token|token\s+(?:is\s+)?(?:invalid|expired)/i
+
+export function isAuthenticationError(error: unknown): boolean {
+  return error instanceof ApiError && (error.status === 401 || error.code === 401 || TOKEN_REJECTED.test(error.message))
+}
+
 export function isTransientRequestError(error: unknown): boolean {
   if (error instanceof NetworkError) return true
   if (!(error instanceof ApiError)) return false
@@ -39,14 +46,19 @@ export function isTransientRequestError(error: unknown): boolean {
   return code === 408 || code === 429 || code >= 500
 }
 
-export async function requestAndDecrypt(input: string, token: string, signal: AbortSignal): Promise<{ status: number, value: unknown }> {
+export async function requestAndDecrypt(
+  input: string, token: string, signal: AbortSignal, json?: Record<string, unknown>,
+): Promise<{ status: number, value: unknown }> {
   const target = parseApiURL(input)
+  const method = json === undefined ? "GET" : "POST"
+  const headers = { ...makeHeaders(target.apiPath, method, token), "Cache-Control": "no-cache, no-store" }
   let response: Response
   let body: string
   try {
     response = await fetch(target.url, {
-      method: "GET",
-      headers: { ...makeHeaders(target.apiPath, "GET", token), "Cache-Control": "no-cache, no-store" },
+      method,
+      headers: json === undefined ? headers : { ...headers, "Content-Type": "application/json" },
+      body: json === undefined ? undefined : JSON.stringify(json),
       timeout: 15,
       signal,
       // 换路径后的签名会失效，不携带 token 自动跳转。
@@ -58,13 +70,14 @@ export async function requestAndDecrypt(input: string, token: string, signal: Ab
     throw new NetworkError("网络请求失败或超过 15 秒，请检查网址和网络连接。" + (error instanceof Error ? " " + error.message : ""))
   }
   const status = `HTTP ${response.status}`
+  const responseError = json === undefined ? body.slice(0, 300) : "登录接口返回错误"
   if (!body.trim()) throw new ApiError(`${status}：响应为空`, response.status)
 
   let envelope: unknown
   try {
     envelope = JSON.parse(body)
   } catch {
-    if (!response.ok) throw new ApiError(`${status}：${body.slice(0, 300)}`, response.status)
+    if (!response.ok) throw new ApiError(`${status}：${responseError}`, response.status)
     throw new Error(`${status}：响应不是有效的 JSON`)
   }
 
@@ -76,13 +89,13 @@ export async function requestAndDecrypt(input: string, token: string, signal: Ab
       "msg" in envelope ? envelope.msg : undefined,
     ]
     const message = candidates.find((value): value is string => typeof value === "string" && value.trim() !== "")?.trim()
-    if (typeof code === "number" && code >= 400) {
+    if (typeof code === "number" && (code >= 400 || (json !== undefined && code !== 200))) {
       const fallback = code === 401 ? "网站拒绝了当前请求，请检查登录状态或章节权限。" : "接口返回错误"
       throw new ApiError(`${status}：接口 ${code}：${message || fallback}`, response.status, code)
     }
-    if (!response.ok && message) throw new ApiError(`${status}：${message}`, response.status)
+    if (message && (!response.ok || (json === undefined && TOKEN_REJECTED.test(message)))) throw new ApiError(`${status}：${message}`, response.status)
   }
-  if (!response.ok) throw new ApiError(`${status}：${body.slice(0, 300)}`, response.status)
+  if (!response.ok) throw new ApiError(`${status}：${responseError}`, response.status)
 
   try {
     return { status: response.status, value: decryptResponse(envelope) }

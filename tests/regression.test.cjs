@@ -116,6 +116,8 @@ test('login uses two regular text fields and tapping blank space only hides the 
     if (!(index in hooks)) hooks[index] = initial
     return [hooks[index], value => { hooks[index] = value }]
   }
+  ui.useRef = current => ({ current })
+  ui.useEffect = () => {}
   const { ProfileView } = load('ProfileView.tsx', { scripting: ui }, { Keyboard: { hide() { hidden++ } } })
   function page() {
     cursor = 0
@@ -143,6 +145,104 @@ test('login uses two regular text fields and tapping blank space only hides the 
   assert.equal(dismissed, 1)
 })
 
+function loginFixture(respond, saved = { username: 'fixture-user', password: 'fixture-password', token: 'old-token' }) {
+  const crypto = require('node:crypto')
+  const decrypt = load('decrypt.ts', { 'node:crypto': crypto, 'node:buffer': require('node:buffer') }, { TextDecoder })
+  function envelope(value) {
+    const suffix = '012345'
+    const cipher = crypto.createCipheriv('aes-256-cbc', Buffer.from(decrypt.KEY), Buffer.from(decrypt.IV_PREFIX + suffix))
+    const data = Buffer.concat([cipher.update(JSON.stringify(value)), cipher.final()]).toString('base64')
+    return { code: 200, data: { suffix, data } }
+  }
+  const requests = []
+  const request = load('request.ts', { 'node:crypto': crypto, './decrypt': decrypt }, {
+    fetch: async (url, options) => {
+      requests.push({ url, ...options })
+      return new Response(JSON.stringify(await respond(new URL(url), options, envelope)))
+    },
+  })
+  const login = load('login.ts', { './request': request }, {
+    Storage: { get: () => saved, set: (_, value) => { saved = value; return true } },
+  })
+  const catalog = load('catalog.ts', { './request': request, './login': login })
+  return { catalog, login, requests, request }
+}
+
+test('manual login signs a JSON POST and immediately replaces the saved credentials and token', async () => {
+  let attempts = 0
+  const { login, request, requests } = loginFixture((url, _, envelope) => {
+    assert.equal(url.pathname, '/api/newLogins')
+    return ++attempts === 1 ? envelope({ token: 'manual-token', member: { ignored: true } }) :
+      { code: 401, msg: '登录失败' }
+  })
+  assert.equal(requests.length, 0)
+  const credentials = { username: 'new-user', password: 'new-password' }
+  await login.signIn(credentials, signal())
+  const [{ method, headers, body }] = requests
+  assert.equal(method, 'POST')
+  assert.equal(headers['Content-Type'], 'application/json')
+  assert.equal(headers.token, undefined)
+  assert.equal(headers.sign, request.makeHeaders('/newLogins', 'POST', undefined, Number(headers.timestamp) * 1000).sign)
+  assert.deepEqual(JSON.parse(body), { ...credentials, type: 0 })
+  assert.deepEqual({ ...login.readLogin() }, { ...credentials, token: 'manual-token' })
+  await assert.rejects(login.signIn({ username: 'bad-input', password: 'invalid' }, signal()), /登录失败/)
+  assert.equal(login.readLogin().token, 'manual-token')
+  assert.equal(login.readLogin().username, 'new-user')
+})
+
+test('concurrent chapter requests renew once, persisting only after a validated retry', async () => {
+  let releaseRetry
+  const waitForRetry = new Promise(resolve => { releaseRetry = resolve })
+  const { catalog, login, requests } = loginFixture(async (url, options, envelope) => {
+    if (url.pathname === '/api/newLogins') return envelope({ token: 'renewed-token' })
+    if (options.headers.token === 'old-token') return { code: 401, msg: 'token失效' }
+    await waitForRetry
+    return envelope({ chapterDetail: { id: Number(url.searchParams.get('chapter_id')), book_id: 7, image_list: ['/1.jpg'] } })
+  })
+  const firstRead = catalog.fetchReaderChapter(7, first, signal())
+  const secondRead = catalog.fetchReaderChapter(7, second, signal())
+  await settle()
+  assert.equal(login.readLogin().token, 'old-token')
+  assert.equal(requests.filter(item => item.method === 'POST').length, 1)
+  releaseRetry()
+  await Promise.all([firstRead, secondRead])
+  assert.equal(login.readLogin().token, 'renewed-token')
+  assert.equal(requests.filter(item => item.headers.token === 'renewed-token').length, 2)
+})
+
+test('chapter failures preserve the saved token and ordinary errors do not trigger login', async () => {
+  const { catalog, login, requests } = loginFixture((url, options, envelope) => {
+    if (url.pathname === '/api/newLogins') return envelope({ token: 'unused-token' })
+    if (url.searchParams.get('chapter_id') === '2') return { code: 500, msg: '章节出错' }
+    if (options.headers.token === 'old-token') return { code: 403, msg: 'token 已过期' }
+    return envelope({ chapterDetail: { id: first.id, book_id: 7, image_list: [] } })
+  })
+  await assert.rejects(catalog.fetchReaderChapter(7, second, signal()), /章节出错/)
+  assert.equal(requests.length, 1)
+  await assert.rejects(catalog.fetchReaderChapter(7, first, signal()), /图片列表为空/)
+  assert.equal(login.readLogin().token, 'old-token')
+  assert.equal(requests.filter(item => item.method === 'POST').length, 1)
+})
+
+test('a pending automatic refresh cannot overwrite a successful manual login', async () => {
+  let releaseRetry
+  const waitForRetry = new Promise(resolve => { releaseRetry = resolve })
+  const { catalog, login } = loginFixture(async (url, options, envelope) => {
+    if (url.pathname === '/api/newLogins') {
+      return envelope({ token: JSON.parse(options.body).username === 'manual-user' ? 'manual-token' : 'renewed-token' })
+    }
+    if (options.headers.token === 'old-token') return { code: 401, msg: 'token失效' }
+    await waitForRetry
+    return envelope({ chapterDetail: { id: 1, book_id: 7, image_list: ['/1.jpg'] } })
+  })
+  const chapter = catalog.fetchReaderChapter(7, first, signal())
+  await settle()
+  await login.signIn({ username: 'manual-user', password: 'manual-password' }, signal())
+  releaseRetry()
+  await chapter
+  assert.equal(login.readLogin().token, 'manual-token')
+})
+
 test('failed history read leaves previously saved history intact', () => {
   const record = { book, chapter: first, page: 1, pageCount: 2, readAt: 1 }
   let value = [record], fail = true, writes = 0
@@ -167,7 +267,13 @@ test('valid rows survive malformed data and image numbering is stable', async ()
     } } },
     '/api/chaptersDetails': { chapterDetail: { id: 1, book_id: 7, image_list: ['/1.jpg', null, '/3.jpg'] } },
   }
-  const catalog = load('catalog.ts', { './request': { requestAndDecrypt: async url => ({ value: data[new URL(url).pathname] }) } })
+  const catalog = load('catalog.ts', {
+    './request': {
+      SITE_ORIGIN: 'https://www.18akmanhua.com',
+      requestAndDecrypt: async url => ({ value: data[new URL(url).pathname] }),
+    },
+    './login': { withChapterToken: request => request('') },
+  })
   assert.equal((await catalog.fetchCatalog(0, 1, signal())).books.length, 1)
   assert.equal((await catalog.fetchChapterPage(7, 1, signal())).chapters[0].title, '第1话')
   const detail = await catalog.fetchBookDetails(book, signal())

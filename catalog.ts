@@ -1,6 +1,5 @@
-import { requestAndDecrypt } from "./request"
-
-export const SITE_ORIGIN = "https://www.18akmanhua.com"
+import { requestAndDecrypt, SITE_ORIGIN } from "./request"
+import { withChapterToken } from "./login"
 const PAGE_SIZE = 15
 
 export type Category = { id: number; name: string }
@@ -131,28 +130,24 @@ export async function fetchChapterPage(bookID: number, page: number, signal: Abo
 
 export type ReaderChapter = { chapter: Chapter; images: string[] }
 
-let readerToken = ""
-
-export function setReaderToken(token: string) {
-  readerToken = token
-}
-
 export async function fetchReaderChapter(bookID: number, chapter: Chapter, signal: AbortSignal): Promise<ReaderChapter> {
   const url = new URL("/api/chaptersDetails", SITE_ORIGIN)
   url.searchParams.set("chapter_id", String(chapter.id))
-  const { value } = await requestAndDecrypt(url.href, readerToken, signal)
-  if (!isRecord(value) || !isRecord(value.chapterDetail)) throw new Error("章节详情格式有误。")
-  const detail = value.chapterDetail
-  if (detail.id !== chapter.id || detail.book_id !== bookID || !Array.isArray(detail.image_list)) {
-    throw new Error("章节详情与当前漫画不匹配。")
-  }
-  const images = detail.image_list.map(coverURL)
-  if (!images.some(Boolean)) throw new Error("这一话的图片列表为空或没有有效地址。")
-  return {
-    chapter: { id: chapter.id, title: textValue(detail.title) || chapter.title,
-      number: chapterNumber(detail.sort) ?? chapter.number },
-    images,
-  }
+  return withChapterToken(async token => {
+    const { value } = await requestAndDecrypt(url.href, token, signal)
+    if (!isRecord(value) || !isRecord(value.chapterDetail)) throw new Error("章节详情格式有误。")
+    const detail = value.chapterDetail
+    if (detail.id !== chapter.id || detail.book_id !== bookID || !Array.isArray(detail.image_list)) {
+      throw new Error("章节详情与当前漫画不匹配。")
+    }
+    const images = detail.image_list.map(coverURL)
+    if (!images.some(Boolean)) throw new Error("这一话的图片列表为空或没有有效地址。")
+    return {
+      chapter: { id: chapter.id, title: textValue(detail.title) || chapter.title,
+        number: chapterNumber(detail.sort) ?? chapter.number },
+      images,
+    }
+  }, signal)
 }
 
 export function appendCatalog(previous: Catalog | undefined, next: Catalog): Catalog {

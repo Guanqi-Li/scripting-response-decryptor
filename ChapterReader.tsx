@@ -1,10 +1,10 @@
 import {
-  Button, Dialog, GeometryReader, HStack, Image, LazyVStack, Navigation, NavigationStack,
+  Button, GeometryReader, HStack, Image, LazyVStack, Navigation, NavigationStack,
   ProgressView, Rectangle, ScrollView, Spacer, Text, VStack, ZStack, useEffect, useObservable, useRef,
 } from "scripting"
-import { setReaderToken, type Chapter, type Comic, type ReaderChapter } from "./catalog"
+import type { Chapter, Comic, ReaderChapter } from "./catalog"
 import { ChapterDirectoryRows } from "./ChapterDirectoryView"
-import { ApiError, isTransientRequestError } from "./request"
+import { isTransientRequestError } from "./request"
 import { ReaderRequests, type ReaderCache } from "./reader-cache"
 import { chapterLabel, saveReadingRecord, type ReadingRecord } from "./reading-history"
 
@@ -112,12 +112,10 @@ export function ChapterReader({ book, chapter, initialPage, opening, cache, getC
   const error = useObservable("error" in opening
     ? openingError instanceof Error ? openingError.message : String(openingError)
     : "")
-  const needsToken = useObservable(openingError instanceof ApiError && (openingError.code === 401 || openingError.status === 401))
   const errorKind = useRef<"open" | "append">("open")
   const directoryGap = useObservable<number | null>(null)
   const directoryError = useObservable("")
   const directoryRequest = useRef<AbortController | null>(null)
-  const tokenPromptOpen = useRef(false)
   const warning = useObservable("")
   const mounted = useRef(true)
   const scrollKey = useObservable(0)
@@ -260,41 +258,13 @@ export function ChapterReader({ book, chapter, initialPage, opening, cache, getC
   function setChapterError(cause: unknown, kind: "open" | "append") {
     if (!mounted.current) return
     errorKind.current = kind
-    needsToken.setValue(cause instanceof ApiError && (cause.code === 401 || cause.status === 401))
     error.setValue(cause instanceof Error ? cause.message : String(cause))
-  }
-
-  async function enterReadingToken() {
-    if (tokenPromptOpen.current) return
-    tokenPromptOpen.current = true
-    try {
-      const value = await Dialog.prompt({
-        title: "设置阅读 token",
-        message: "请输入你自己账号的有效 token。本次运行有效。",
-        placeholder: "token",
-        obscureText: true,
-        confirmLabel: "重试章节",
-      })
-      const token = value?.trim()
-      if (!mounted.current || !token) return
-      if (/[\r\n]/.test(token)) {
-        await Dialog.alert({ title: "token 格式不正确", message: "请只输入一行 token。" })
-        return
-      }
-      setReaderToken(token)
-      retry.current?.()
-    } catch {
-      if (mounted.current) error.setValue("无法打开 token 输入框，请重试。")
-    } finally {
-      tokenPromptOpen.current = false
-    }
   }
 
   async function openChapter(next: Chapter, resumePage = 1) {
     if (busy.value || !mounted.current) return
     busy.setValue(true)
     error.setValue("")
-    needsToken.setValue(false)
     retry.current = () => { void openChapter(next, resumePage) }
     try {
       const data = await requests.chapter(next)
@@ -344,7 +314,6 @@ export function ChapterReader({ book, chapter, initialPage, opening, cache, getC
     if (!next) return
     busy.setValue(true)
     error.setValue("")
-    needsToken.setValue(false)
     retry.current = () => { void appendChapter() }
     try {
       const data = await requests.chapter(next)
@@ -493,10 +462,9 @@ export function ChapterReader({ book, chapter, initialPage, opening, cache, getC
       {error.value ? (
         <VStack spacing={8} padding={14} background="secondarySystemBackground">
           <Text>{error.value}</Text>
-          {needsToken.value ? <Button title="设置阅读 token" action={enterReadingToken} />
-            : <Button title="重试章节" action={() => retry.current?.()} />}
+          <Button title="重试章节" action={() => retry.current?.()} />
           {!items.length ? <Button title="返回" action={close} /> :
-            <Button title="关闭提示" action={() => { error.setValue(""); needsToken.setValue(false); maybeAppend() }} />}
+            <Button title="关闭提示" action={() => { error.setValue(""); maybeAppend() }} />}
         </VStack>
       ) : directoryGap.value !== null ? (
         <VStack spacing={8} padding={14} background="secondarySystemBackground">
