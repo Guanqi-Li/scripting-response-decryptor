@@ -270,13 +270,18 @@ test('a pending automatic refresh cannot overwrite a successful manual login', a
   assert.equal(login.readLogin().token, 'manual-token')
 })
 
-test('catalog pagination fires once when a drag from the bottom exceeds three points', () => {
+function mountCatalogScroll() {
   const { ComicGrid } = load('ComicGrid.tsx', { scripting: {
     ScrollView: 'ScrollView',
     useObservable: value => ({ value }),
     useRef: current => ({ current }),
     useEffect() {},
-  } })
+  } }, {
+    DragGesture: () => ({
+      onChanged(callback) { this.changed = callback; return this },
+      onEnded(callback) { this.ended = callback; return this },
+    }),
+  })
   let requests = 0
   const scroll = ComicGrid({
     entry: { data: { page: 1, totalPage: 2, books: [] } },
@@ -289,20 +294,53 @@ test('catalog pagination fires once when a drag from the bottom exceeds three po
     containerSize: { height: 600 },
     contentOffset: { y },
   })
-  const phase = (previous, next, y) => scroll.onScrollPhaseChange(previous, next, { geometry: geometry(y) })
-  const drag = y => scroll.onScrollGeometryChange.onChanged(null, geometry(y))
-  phase('idle', 'tracking', 250)
-  phase('tracking', 'interacting', 255)
-  drag(304)
-  assert.equal(requests, 0)
+  return {
+    phase: (previous, next, y) => scroll.onScrollPhaseChange(previous, next, { geometry: geometry(y) }),
+    offset: (oldY, newY) => scroll.onScrollGeometryChange.onChanged(geometry(oldY), geometry(newY)),
+    move: (width, height) => scroll.simultaneousGesture.changed({ translation: { width, height } }),
+    release: (width, height) => scroll.simultaneousGesture.ended({ translation: { width, height } }),
+    requests: () => requests,
+  }
+}
 
-  phase('idle', 'tracking', 300)
-  phase('tracking', 'interacting', 300)
-  drag(303)
-  assert.equal(requests, 0)
-  drag(303.1)
-  drag(307)
-  assert.equal(requests, 1)
+test('catalog pagination fires once when a drag from the bottom exceeds three points', () => {
+  const scroll = mountCatalogScroll()
+  scroll.phase('idle', 'tracking', 250)
+  scroll.phase('tracking', 'interacting', 255)
+  scroll.offset(300, 304)
+  assert.equal(scroll.requests(), 0)
+
+  scroll.phase('idle', 'tracking', 300)
+  scroll.phase('tracking', 'interacting', 300)
+  scroll.offset(300, 303)
+  assert.equal(scroll.requests(), 0)
+  scroll.offset(303, 303.1)
+  scroll.offset(303.1, 307)
+  assert.equal(scroll.requests(), 1)
+})
+
+test('a quick pull can load on release without a new tap or a geometry sample', () => {
+  const scroll = mountCatalogScroll()
+  scroll.phase('idle', 'tracking', 300)
+  scroll.phase('tracking', 'idle', 300)
+  assert.equal(scroll.requests(), 0)
+  scroll.phase('idle', 'tracking', 300)
+  scroll.phase('tracking', 'interacting', 300)
+  scroll.phase('interacting', 'decelerating', 304)
+  scroll.offset(304, 300)
+  assert.equal(scroll.requests(), 1)
+})
+
+test('finger translation still triggers pagination if the scroll offset was clamped or coalesced', () => {
+  const scroll = mountCatalogScroll()
+  scroll.phase('idle', 'tracking', 300)
+  scroll.move(8, -4)
+  scroll.move(0, -3)
+  assert.equal(scroll.requests(), 0)
+  scroll.release(0, -4)
+  scroll.phase('tracking', 'interacting', 300)
+  scroll.phase('interacting', 'idle', 305)
+  assert.equal(scroll.requests(), 1)
 })
 
 test('failed history read leaves previously saved history intact', () => {

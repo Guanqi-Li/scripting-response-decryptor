@@ -165,7 +165,7 @@ export function ComicGrid({ entry, covers, loadPage, openBook, initialPosition, 
   onInteraction: () => void
 }) {
   const position = useObservable<string | null>(initialPosition)
-  const drag = useRef({ startedAtBottom: false, interacting: false })
+  const drag = useRef<{ startDistance: number | null; hasDragged: boolean }>({ startDistance: null, hasDragged: false })
   const data = entry?.data
   const hasMore = data !== undefined && data.page < data.totalPage
 
@@ -175,25 +175,45 @@ export function ComicGrid({ entry, covers, loadPage, openBook, initialPosition, 
     return () => position.unsubscribe(record)
   }, [savePosition])
 
+  function loadIfPulledPastBottom(distance: number) {
+    if (!hasMore || entry?.loading || entry?.error || drag.current.startDistance === null || distance >= -3) return
+    drag.current.startDistance = null
+    loadPage()
+  }
+
+  function checkDrag({ translation }: { translation: { width: number; height: number } }) {
+    const start = drag.current.startDistance
+    if (start !== null && -translation.height > Math.abs(translation.width)) {
+      loadIfPulledPastBottom(start + translation.height)
+    }
+  }
+
   return (
     <ScrollView
       scrollPosition={{ value: position, anchor: "top" }}
       scrollBounceBehavior="always"
+      simultaneousGesture={hasMore && typeof DragGesture === "function"
+        ? DragGesture({ minDistance: 3 }).onChanged(checkDrag).onEnded(checkDrag)
+        : undefined}
       onScrollPhaseChange={(previous, next, { geometry }) => {
-        const beganTouch = next === "tracking" || (next === "interacting" && previous !== "tracking")
-        if (beganTouch) {
-          drag.current.startedAtBottom = distanceFromBottom(geometry) <= 3
+        const distance = distanceFromBottom(geometry)
+        if (next === "tracking" || (next === "interacting" && previous !== "tracking")) {
+          drag.current.startDistance = distance <= 3 ? Math.max(0, distance) : null
+          drag.current.hasDragged = false
         }
-        drag.current.interacting = next === "interacting"
-        if (drag.current.interacting) onInteraction()
+        if (next === "interacting") {
+          drag.current.hasDragged = true
+          onInteraction()
+        }
+        // A quick pull can report its deepest offset at release, before the next geometry callback.
+        if (drag.current.hasDragged) loadIfPulledPastBottom(distance)
+        if (next === "idle" || next === "animating") drag.current.hasDragged = false
       }}
       onScrollGeometryChange={{
         of: "geometry",
-        onChanged: (_, geometry) => {
-          if (hasMore && !entry?.loading && !entry?.error && drag.current.startedAtBottom
-            && drag.current.interacting && distanceFromBottom(geometry) < -3) {
-            drag.current.startedAtBottom = false
-            loadPage()
+        onChanged: (previous, geometry) => {
+          if (drag.current.hasDragged) {
+            loadIfPulledPastBottom(Math.min(distanceFromBottom(previous), distanceFromBottom(geometry)))
           }
         },
       }}
