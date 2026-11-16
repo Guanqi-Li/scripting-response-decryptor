@@ -37,6 +37,69 @@ test('entry exists and all script files compile', () => {
   for (const file of fs.readdirSync(root).filter(file => /\.tsx?$/.test(file))) transpile(file)
 })
 
+test('opening or dismissing the navigation preserves the loaded grid and its scroll position', async () => {
+  const mainHooks = [], navHooks = [], effects = []
+  let hooks, cursor, root, catalogRequests = 0
+  const slot = initial => {
+    const index = cursor++
+    return index in hooks ? hooks[index] : hooks[index] = initial
+  }
+  const ui = Object.fromEntries(['Button', 'Capsule', 'HStack', 'Image', 'NavigationStack', 'ScrollView', 'Text',
+    'VStack', 'ZStack'].map(type => [type, type]))
+  Object.assign(ui, {
+    Device: { screen: { width: 390 } },
+    Navigation: { present({ element }) { root = element; return new Promise(() => {}) } },
+    Script: { supportsMinimization: () => false, exit() {} },
+    useState(initial) { const entry = slot({ value: initial }); return [entry.value, value => { entry.value = value }] },
+    useRef: value => slot({ current: value }),
+    useEffect(effect) {
+      const entry = slot({ ran: false })
+      if (entry.ran) return
+      entry.ran = true
+      effects.push(effect)
+    },
+  })
+  const { MainNavigation } = load('MainNavigation.tsx', { scripting: ui }, {
+    Animation: { smooth: () => null }, Transition: { opacity: () => null }, UIGlass: { regular: () => null },
+  })
+  load('index.tsx', {
+    scripting: ui,
+    './MainNavigation': { MainNavigation },
+    './ComicGrid': { ComicGrid: 'ComicGrid', CoverCache: class {} },
+    './reader-cache': { ReaderCache: class {} },
+    './reading-history': { getReadingHistory: () => [] },
+    './catalog': {
+      clearLegacyCatalogCache() {},
+      fetchCategories: async () => [{ id: 0, name: '新作' }],
+      fetchCatalog: async () => { catalogRequests++; return { page: 1, totalPage: 1, books: [book] } },
+      appendCatalog: (_, next) => next,
+    },
+  }, { TapGesture: () => ({ onEnded: action => action }) })
+  const render = (component, state) => { hooks = state; cursor = 0; return component.type(component.props) }
+  const main = () => render(root, mainHooks).props.children.props
+  const nav = props => render(props.overlay.content, navHooks).props
+  const grid = props => props.children.props.children[0].props.children[2]
+  main()
+  effects.shift()()
+  await settle()
+  const initial = main()
+  const initialGrid = grid(initial)
+  initialGrid.props.savePosition('7')
+  const collapsed = nav(initial)
+  effects.shift()()
+  assert.equal(collapsed.frame.width, 52)
+  collapsed.children[1].props.action()
+  assert.equal(nav(initial).frame.width, 358)
+  assert.equal(grid(main()).props.entry, initialGrid.props.entry)
+  initialGrid.props.onInteraction()
+  const updated = main()
+  assert.equal(nav(updated).frame.width, 52)
+  assert.equal(grid(updated).key, initialGrid.key)
+  assert.equal(grid(updated).props.entry, initialGrid.props.entry)
+  assert.equal(grid(updated).props.initialPosition, '7')
+  assert.equal(catalogRequests, 1)
+})
+
 test('failed history read leaves previously saved history intact', () => {
   const record = { book, chapter: first, page: 1, pageCount: 2, readAt: 1 }
   let value = [record], fail = true, writes = 0

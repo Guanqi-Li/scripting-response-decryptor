@@ -21,7 +21,7 @@ function MainView() {
   const [categoryError, setCategoryError] = useState("")
   const [selectedBook, setSelectedBook] = useState<Comic | null>(null)
   const [activeTab, setActiveTab] = useState<MainTab>("home")
-  const [navigationExpanded, setNavigationExpanded] = useState(false)
+  const closeNavigation = useRef<(() => void) | null>(null)
   const [history, setHistory] = useState<ReadingRecord[]>([])
   const [historyError, setHistoryError] = useState("")
   const categoryPositions = useRef(new Map<number, string>())
@@ -114,7 +114,7 @@ function MainView() {
   }
 
   function dismissNavigation() {
-    setNavigationExpanded(false)
+    closeNavigation.current?.()
   }
 
   function openBook(book: Comic) {
@@ -139,8 +139,7 @@ function MainView() {
         alignment: "bottomTrailing",
         content: <MainNavigation
           activeTab={activeTab}
-          expanded={navigationExpanded}
-          expand={() => setNavigationExpanded(true)}
+          closeAction={closeNavigation}
           select={selectTab}
         />,
       } : undefined}
@@ -178,7 +177,7 @@ function MainView() {
       <ZStack
         frame={{ maxWidth: "infinity", maxHeight: "infinity", alignment: "top" }}
         contentShape="rect"
-        simultaneousGesture={navigationExpanded ? TapGesture().onEnded(dismissNavigation) : undefined}
+        simultaneousGesture={TapGesture().onEnded(dismissNavigation)}
       >
         <VStack spacing={0} opacity={isHome ? 1 : 0} allowsHitTesting={isHome} accessibilityHidden={!isHome}>
           {categories?.length ? <ScrollView
