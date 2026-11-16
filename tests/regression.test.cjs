@@ -44,10 +44,9 @@ test('opening or dismissing the navigation preserves the loaded grid and its scr
     const index = cursor++
     return index in hooks ? hooks[index] : hooks[index] = initial
   }
-  const ui = Object.fromEntries(['Button', 'Capsule', 'HStack', 'Image', 'NavigationStack', 'ScrollView', 'Text',
+  const ui = Object.fromEntries(['Button', 'Capsule', 'HStack', 'Image', 'NavigationStack', 'Rectangle', 'ScrollView', 'Text',
     'VStack', 'ZStack'].map(type => [type, type]))
   Object.assign(ui, {
-    Device: { screen: { width: 390 } },
     Navigation: { present({ element }) { root = element; return new Promise(() => {}) } },
     Script: { supportsMinimization: () => false, exit() {} },
     useState(initial) { const entry = slot({ value: initial }); return [entry.value, value => { entry.value = value }] },
@@ -59,9 +58,7 @@ test('opening or dismissing the navigation preserves the loaded grid and its scr
       effects.push(effect)
     },
   })
-  const { MainNavigation } = load('MainNavigation.tsx', { scripting: ui }, {
-    Animation: { smooth: () => null }, Transition: { opacity: () => null }, UIGlass: { regular: () => null },
-  })
+  const { MainNavigation } = load('MainNavigation.tsx', { scripting: ui })
   load('index.tsx', {
     scripting: ui,
     './MainNavigation': { MainNavigation },
@@ -74,7 +71,7 @@ test('opening or dismissing the navigation preserves the loaded grid and its scr
       fetchCatalog: async () => { catalogRequests++; return { page: 1, totalPage: 1, books: [book] } },
       appendCatalog: (_, next) => next,
     },
-  }, { TapGesture: () => ({ onEnded: action => action }) })
+  })
   const render = (component, state) => { hooks = state; cursor = 0; return component.type(component.props) }
   const main = () => render(root, mainHooks).props.children.props
   const nav = props => render(props.overlay.content, navHooks).props
@@ -87,17 +84,23 @@ test('opening or dismissing the navigation preserves the loaded grid and its scr
   initialGrid.props.savePosition('7')
   const collapsed = nav(initial)
   effects.shift()()
-  assert.equal(collapsed.frame.width, 52)
-  collapsed.children[1].props.action()
-  assert.equal(nav(initial).frame.width, 358)
+  assert.equal(collapsed.buttonStyle, 'glass')
+  collapsed.action()
+  const expanded = nav(initial)
+  assert.equal(expanded.frame.height, 52)
+  assert.equal(expanded.children[1].props.children.length, 3)
   assert.equal(grid(main()).props.entry, initialGrid.props.entry)
   initialGrid.props.onInteraction()
   const updated = main()
-  assert.equal(nav(updated).frame.width, 52)
+  assert.equal(nav(updated).accessibilityLabel, '展开导航')
   assert.equal(grid(updated).key, initialGrid.key)
   assert.equal(grid(updated).props.entry, initialGrid.props.entry)
   assert.equal(grid(updated).props.initialPosition, '7')
   assert.equal(catalogRequests, 1)
+  nav(updated).action()
+  assert.equal(nav(updated).frame.height, 52)
+  updated.children.props.background.props.onTapGesture()
+  assert.equal(nav(updated).accessibilityLabel, '展开导航')
 })
 
 test('failed history read leaves previously saved history intact', () => {

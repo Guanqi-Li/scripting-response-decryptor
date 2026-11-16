@@ -1,5 +1,5 @@
 import {
-  Button, Dialog, HStack, Image, Navigation, NavigationStack, RoundedRectangle,
+  Button, Dialog, HStack, Image, Navigation, NavigationStack, Rectangle, RoundedRectangle,
   Script, ScrollView, Text, VStack, ZStack, useEffect, useRef, useState,
 } from "scripting"
 import { ComicGrid, CoverCache, type CatalogEntry } from "./ComicGrid"
@@ -176,8 +176,12 @@ function MainView() {
     >
       <ZStack
         frame={{ maxWidth: "infinity", maxHeight: "infinity", alignment: "top" }}
-        contentShape="rect"
-        simultaneousGesture={TapGesture().onEnded(dismissNavigation)}
+        background={<Rectangle
+          fill="clear"
+          contentShape="rect"
+          onTapGesture={dismissNavigation}
+          accessibilityHidden
+        />}
       >
         <VStack spacing={0} opacity={isHome ? 1 : 0} allowsHitTesting={isHome} accessibilityHidden={!isHome}>
           {categories?.length ? <ScrollView

@@ -1,4 +1,4 @@
-import { Button, Capsule, Device, HStack, Image, Text, VStack, ZStack, useEffect, useRef, useState } from "scripting"
+import { Button, Capsule, HStack, Image, Text, VStack, ZStack, useEffect, useRef, useState } from "scripting"
 
 export type MainTab = "home" | "history" | "profile"
 
@@ -9,8 +9,8 @@ const tabs = [
 ] as const
 
 const height = 52
-const edgeInset = 16
 const tabInset = 4
+const tabWidth = (288 - tabInset * 2) / tabs.length
 
 type MainNavigationProps = {
   activeTab: MainTab
@@ -34,74 +34,58 @@ export function MainNavigation({ activeTab, closeAction, select }: MainNavigatio
     }
   }, [closeAction])
 
-  function expand() {
-    expandedRef.current = true
-    setExpanded(true)
-  }
+  if (!expanded) return (
+    <Button buttonStyle="glass" buttonBorderShape="circle"
+      padding={{ trailing: 16, bottom: 12 }}
+      accessibilityLabel="展开导航"
+      action={() => {
+        expandedRef.current = true
+        setExpanded(true)
+      }}
+    >
+      <Image systemName="line.3.horizontal" font="title3" frame={{ width: 36, height: 36 }} />
+    </Button>
+  )
 
-  const expandedWidth = Math.min(420, Device.screen.width - edgeInset * 2)
-  const tabWidth = (expandedWidth - tabInset * 2) / tabs.length
   const selectedIndex = tabs.findIndex(tab => tab.id === activeTab)
-
+  const selectionAnimation = typeof Animation !== "undefined" && typeof Animation.easeOut === "function"
+    ? { animation: Animation.easeOut(0.24), value: activeTab }
+    : undefined
   return (
-    <ZStack
-      alignment="trailing"
-      frame={{ width: expanded ? expandedWidth : height, height, alignment: "trailing" }}
-      animation={{ animation: Animation.smooth({ duration: 0.28 }), value: expanded }}
-      padding={{ trailing: edgeInset, bottom: 12 }}
+    <ZStack alignment="leading"
+      frame={{ height }}
+      glassEffect
+      padding={{ trailing: 16, bottom: 12 }}
     >
       <Capsule
-        fill="clear"
-        frame={{ width: expanded ? expandedWidth : height, height }}
-        glassEffect={{ glass: UIGlass.regular(), shape: "capsule" }}
+        fill="tertiarySystemFill"
+        frame={{ width: tabWidth, height: height - tabInset * 2 }}
+        offset={{ x: tabInset + selectedIndex * tabWidth, y: 0 }}
+        animation={selectionAnimation}
         allowsHitTesting={false}
         accessibilityHidden
       />
-      {expanded ? (
-        <ZStack alignment="leading" transition={Transition.opacity()}>
-          <Capsule
-            fill="tertiarySystemFill"
-            frame={{ width: tabWidth, height: height - tabInset * 2 }}
-            offset={{ x: tabInset + selectedIndex * tabWidth, y: 0 }}
-            animation={{ animation: Animation.smooth({ duration: 0.25 }), value: activeTab }}
-            allowsHitTesting={false}
-            accessibilityHidden
-          />
-          <HStack spacing={0} padding={{ horizontal: tabInset }}>
-            {tabs.map(({ id, label, icon }) => {
-              const selected = activeTab === id
-              return (
-                <Button
-                  key={id}
-                  buttonStyle="plain"
-                  accessibilityLabel={label}
-                  accessibilityAddTraits={selected ? "isSelected" : undefined}
-                  action={() => select(id)}
-                >
-                  <VStack spacing={2}
-                    frame={{ width: tabWidth, height: height - tabInset * 2 }}
-                    contentShape="rect"
-                    foregroundStyle={selected ? "systemBlue" : "label"}
-                  >
-                    <Image systemName={icon} font="body" />
-                    <Text font="caption" fontWeight="semibold">{label}</Text>
-                  </VStack>
-                </Button>
-              )
-            })}
-          </HStack>
-        </ZStack>
-      ) : (
-        <Button
-          buttonStyle="plain"
-          accessibilityLabel="展开导航"
-          transition={Transition.opacity()}
-          action={expand}
-        >
-          <Image systemName="line.3.horizontal" font="title3"
-            frame={{ width: height, height }} contentShape="circle" />
-        </Button>
-      )}
+      <HStack spacing={0} padding={{ horizontal: tabInset }}>
+        {tabs.map(({ id, label, icon }) => {
+          const selected = activeTab === id
+          return (
+            <Button key={id} buttonStyle="plain"
+              accessibilityLabel={label}
+              accessibilityAddTraits={selected ? "isSelected" : undefined}
+              action={() => select(id)}
+            >
+              <VStack spacing={2}
+                frame={{ width: tabWidth, height: height - tabInset * 2 }}
+                contentShape="rect"
+                foregroundStyle={selected ? "systemBlue" : "label"}
+              >
+                <Image systemName={icon} font="body" />
+                <Text font="caption" fontWeight="semibold">{label}</Text>
+              </VStack>
+            </Button>
+          )
+        })}
+      </HStack>
     </ZStack>
   )
 }
