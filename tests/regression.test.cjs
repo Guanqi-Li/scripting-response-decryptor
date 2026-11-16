@@ -37,9 +37,10 @@ test('entry exists and all script files compile', () => {
   for (const file of fs.readdirSync(root).filter(file => /\.tsx?$/.test(file))) transpile(file)
 })
 
-test('opening or dismissing the navigation preserves the loaded grid and its scroll position', async () => {
+test('home recovers its initial category request and preserves the loaded grid when navigating', async () => {
   const mainHooks = [], navHooks = [], effects = []
-  let hooks, cursor, root, catalogRequests = 0
+  let hooks, cursor, root, catalogRequests = 0, categoryRequests = 0
+  let signedIn = false
   const slot = initial => {
     const index = cursor++
     return index in hooks ? hooks[index] : hooks[index] = initial
@@ -59,20 +60,28 @@ test('opening or dismissing the navigation preserves the loaded grid and its scr
       effects.push(effect)
     },
   })
+  const request = load('request.ts')
   const { MainNavigation } = load('MainNavigation.tsx', { scripting: ui })
   load('index.tsx', {
     scripting: ui,
     './MainNavigation': { MainNavigation },
+    './request': request,
+    './ProfileView': { ProfileView: 'ProfileView' },
     './ComicGrid': { ComicGrid: 'ComicGrid', CoverCache: class {} },
     './reader-cache': { ReaderCache: class {} },
     './reading-history': { getReadingHistory: () => [] },
     './catalog': {
       clearLegacyCatalogCache() {},
-      fetchCategories: async () => [{ id: 0, name: '新作' }],
+      fetchCategories: async () => {
+        categoryRequests++
+        if (categoryRequests === 1) throw new request.ApiError('unavailable', 503)
+        if (!signedIn) throw new request.ApiError('token expired', 200, 401)
+        return [{ id: 0, name: '新作' }]
+      },
       fetchCatalog: async () => { catalogRequests++; return { page: 1, totalPage: 1, books: [book] } },
       appendCatalog: (_, next) => next,
     },
-  })
+  }, { setTimeout: callback => callback() })
   const render = (component, state) => { hooks = state; cursor = 0; return component.type(component.props) }
   const main = () => render(root, mainHooks).props.children.props
   const nav = props => render(props.overlay.content, navHooks).props.children
@@ -80,7 +89,18 @@ test('opening or dismissing the navigation preserves the loaded grid and its scr
   main()
   effects.shift()()
   await settle()
+  assert.equal(categoryRequests, 2)
+  const failed = main().children.props.children[0].props.children[1]
+  assert.equal(failed.props.children[1].props.title, '去登录')
+  failed.props.children[1].props.action()
+  const profile = main()
+  assert.equal(profile.navigationTitle, '我的')
+  signedIn = true
+  profile.children.props.children[2].props.onSignedIn()
+  await settle()
   const initial = main()
+  assert.equal(initial.navigationTitle, '爱漫画')
+  assert.equal(categoryRequests, 3)
   const initialGrid = grid(initial)
   initialGrid.props.savePosition('7')
   const collapsed = nav(initial)
@@ -143,6 +163,17 @@ test('login uses two regular text fields and tapping blank space only hides the 
   assert.equal(hidden, 2)
   scroll.onScrollPhaseChange('tracking', 'interacting')
   assert.equal(dismissed, 1)
+})
+
+test('site-unavailable HTML is classified as retryable even when HTTP reports success', async () => {
+  const request = load('request.ts', { 'node:crypto': require('node:crypto') }, {
+    fetch: async () => new Response('<html><title>Site Unavailable</title></html>'),
+  })
+  await assert.rejects(request.requestAndDecrypt(request.SITE_ORIGIN + '/api/stacksCategories', '', signal()), error => {
+    assert.match(error.message, /无法访问漫画站点/)
+    assert.equal(request.isAuthenticationError(error), false)
+    return request.isTransientRequestError(error)
+  })
 })
 
 function loginFixture(respond, saved = { username: 'fixture-user', password: 'fixture-password', token: 'old-token' }) {

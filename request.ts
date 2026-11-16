@@ -71,11 +71,17 @@ export async function requestAndDecrypt(
   }
   const status = `HTTP ${response.status}`
   const responseError = json === undefined ? body.slice(0, 300) : "登录接口返回错误"
-  if (!body.trim()) throw new ApiError(`${status}：响应为空`, response.status)
+  const text = body.trim()
+  if (!text) throw new ApiError(`${status}：响应为空`, response.status)
+  if (text.startsWith("<")) {
+    const unavailable = /site unavailable|unable to access this site|service unavailable/i.test(text)
+    throw new ApiError(unavailable ? "当前网络无法访问漫画站点，请稍后重试。" :
+      `${status}：漫画站点返回了网页，接口需要 JSON。`, response.status, unavailable ? 503 : undefined)
+  }
 
   let envelope: unknown
   try {
-    envelope = JSON.parse(body)
+    envelope = JSON.parse(text)
   } catch {
     if (!response.ok) throw new ApiError(`${status}：${responseError}`, response.status)
     throw new Error(`${status}：响应不是有效的 JSON`)

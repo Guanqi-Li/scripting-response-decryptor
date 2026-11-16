@@ -4,7 +4,7 @@ import {
 } from "scripting"
 import type { Catalog, Comic } from "./catalog"
 
-export type CatalogEntry = { data?: Catalog; loading?: boolean; error?: string }
+export type CatalogEntry = { data?: Catalog; loading?: boolean; error?: string; needsLogin?: boolean }
 
 type CoverJob = {
   url: string
@@ -155,7 +155,7 @@ function distanceFromBottom(geometry: ScrollGeometry): number {
   return bottom - geometry.contentOffset.y
 }
 
-export function ComicGrid({ entry, covers, loadPage, openBook, initialPosition, savePosition, onInteraction }: {
+export function ComicGrid({ entry, covers, loadPage, openBook, initialPosition, savePosition, onInteraction, onLoginRequired }: {
   entry?: CatalogEntry
   covers: CoverCache
   loadPage: () => void
@@ -163,6 +163,7 @@ export function ComicGrid({ entry, covers, loadPage, openBook, initialPosition, 
   initialPosition: string | null
   savePosition: (id: string) => void
   onInteraction: () => void
+  onLoginRequired?: () => void
 }) {
   const position = useObservable<string | null>(initialPosition)
   const scroll = useRef({ moved: false, requested: false, footerVisible: false, distance: Infinity })
@@ -231,7 +232,8 @@ export function ComicGrid({ entry, covers, loadPage, openBook, initialPosition, 
           {entry?.error ? (
             <VStack spacing={6}>
               <Text>漫画加载失败。{entry.error}</Text>
-              <Button title="重试" action={() => { onInteraction(); loadPage() }} />
+              {entry.needsLogin && onLoginRequired ? <Button title="去登录" action={onLoginRequired} /> :
+              <Button title="重试" action={() => { onInteraction(); loadPage() }} />}
             </VStack>
           ) : null}
         </VStack>

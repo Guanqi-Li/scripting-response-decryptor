@@ -9,6 +9,7 @@ import { MainNavigation, type MainTab } from "./MainNavigation"
 import { ProfileView } from "./ProfileView"
 import { getReadingHistory, type ReadingRecord } from "./reading-history"
 import { ReaderCache } from "./reader-cache"
+import { ApiError, isAuthenticationError, isTransientRequestError } from "./request"
 import type { ChapterDirectoryCache } from "./ChapterDirectoryView"
 import {
   appendCatalog, clearLegacyCatalogCache, fetchCatalog, fetchCategories,
@@ -18,10 +19,11 @@ import {
 function MainView() {
   const [categories, setCategories] = useState<Category[] | null>(null)
   const [selectedCategoryID, setSelectedCategoryID] = useState<number | null>(null)
-  const [categoryError, setCategoryError] = useState("")
+  const [categoryError, setCategoryError] = useState<{ message: string; needsLogin: boolean } | null>(null)
   const [selectedBook, setSelectedBook] = useState<Comic | null>(null)
   const [activeTab, setActiveTab] = useState<MainTab>("home")
   const closeNavigation = useRef<(() => void) | null>(null)
+  const returningFromLogin = useRef(false)
   const [history, setHistory] = useState<ReadingRecord[]>([])
   const [historyError, setHistoryError] = useState("")
   const categoryPositions = useRef(new Map<number, string>())
@@ -64,15 +66,15 @@ function MainView() {
     if (categoryRequest.current) return
     const controller = new AbortController()
     categoryRequest.current = controller
-    setCategoryError("")
+    setCategoryError(null)
     try {
-      const loaded = await fetchCategories(controller.signal)
+      const loaded = await retryHomeRequest(() => fetchCategories(controller.signal), controller.signal)
       if (controller.signal.aborted) return
       setCategories(loaded)
       const first = loaded[0]
       if (first) selectCategory(first.id)
     } catch (error) {
-      if (!controller.signal.aborted) setCategoryError(errorMessage(error))
+      if (!controller.signal.aborted) setCategoryError(homeError(error))
     } finally {
       if (categoryRequest.current === controller) categoryRequest.current = null
     }
@@ -97,24 +99,44 @@ function MainView() {
     pageRequests.current.set(id, controller)
     updateCatalog(id, { data, loading: true })
     try {
-      const next = await fetchCatalog(id, (data?.page ?? 0) + 1, controller.signal)
+      const next = data
+        ? await fetchCatalog(id, data.page + 1, controller.signal)
+        : await retryHomeRequest(() => fetchCatalog(id, 1, controller.signal), controller.signal)
       if (controller.signal.aborted) return
       const combined = appendCatalog(data, next)
       updateCatalog(id, { data: combined })
     } catch (error) {
-      if (!controller.signal.aborted) updateCatalog(id, { data, error: errorMessage(error) })
+      if (!controller.signal.aborted) {
+        const { message, needsLogin } = homeError(error)
+        updateCatalog(id, { data, error: message, needsLogin })
+      }
     } finally {
       if (pageRequests.current.get(id) === controller) pageRequests.current.delete(id)
     }
   }
 
   function selectTab(tab: MainTab) {
+    if (tab !== "profile") returningFromLogin.current = false
     if (tab === "history") refreshHistory()
     setActiveTab(tab)
   }
 
   function dismissNavigation() {
     closeNavigation.current?.()
+  }
+
+  function openLoginForHome() {
+    dismissNavigation()
+    returningFromLogin.current = true
+    setActiveTab("profile")
+  }
+
+  function resumeHomeAfterLogin() {
+    if (!returningFromLogin.current) return
+    returningFromLogin.current = false
+    setActiveTab("home")
+    if (categoryError) void loadCategories()
+    else if (selectedCategoryID !== null) void loadPage(selectedCategoryID)
   }
 
   function openBook(book: Comic) {
@@ -218,8 +240,9 @@ function MainView() {
           </ScrollView> : categories ? <Text>暂无分类</Text> : null}
           {categoryError ? (
             <VStack spacing={6} padding={{ horizontal: 16, vertical: 8 }}>
-              <Text>分类加载失败。{categoryError}</Text>
-              <Button title="重新加载分类" action={() => { dismissNavigation(); void loadCategories() }} />
+              <Text>分类加载失败。{categoryError.message}</Text>
+              {categoryError.needsLogin ? <Button title="去登录" action={openLoginForHome} /> :
+                <Button title="重新加载分类" action={() => { dismissNavigation(); void loadCategories() }} />}
             </VStack>
           ) : null}
           {selectedCategoryID !== null ? (
@@ -231,6 +254,7 @@ function MainView() {
               covers={covers}
               openBook={openBook}
               onInteraction={dismissNavigation}
+              onLoginRequired={openLoginForHome}
               loadPage={() => { void loadPage(selectedCategoryID) }}
             />
           ) : null}
@@ -239,10 +263,27 @@ function MainView() {
           <ReadingHistoryView records={history} error={historyError} retry={refreshHistory} covers={covers}
             openBook={openBook} onInteraction={dismissNavigation} />
         ) : null}
-        {activeTab === "profile" ? <ProfileView onInteraction={dismissNavigation} /> : null}
+        {activeTab === "profile" ? <ProfileView onInteraction={dismissNavigation} onSignedIn={resumeHomeAfterLogin} /> : null}
       </ZStack>
     </VStack>
   </NavigationStack>
+}
+
+function homeError(error: unknown) {
+  const needsLogin = isAuthenticationError(error)
+  return { needsLogin, message: needsLogin ? "请登录后重试。" : errorMessage(error) }
+}
+
+async function retryHomeRequest<T>(request: () => Promise<T>, signal: AbortSignal): Promise<T> {
+  try {
+    return await request()
+  } catch (error) {
+    if (signal.aborted || !isTransientRequestError(error) ||
+      (error instanceof ApiError && (error.code ?? error.status) === 429)) throw error
+    await new Promise<void>(resolve => setTimeout(resolve, 500))
+    if (signal.aborted) throw error
+    return request()
+  }
 }
 
 function errorMessage(error: unknown): string {

@@ -1,7 +1,7 @@
 import { Button, Divider, GeometryReader, HStack, Image, Rectangle, ScrollView, Text, TextField, VStack, useEffect, useRef, useState } from "scripting"
 import { readLogin, signIn } from "./login"
 
-export function ProfileView({ onInteraction }: { onInteraction: () => void }) {
+export function ProfileView({ onInteraction, onSignedIn }: { onInteraction: () => void; onSignedIn?: () => void }) {
   const [account, setAccount] = useState("")
   const [password, setPassword] = useState("")
   const [loggedIn, setLoggedIn] = useState(false)
@@ -35,7 +35,10 @@ export function ProfileView({ onInteraction }: { onInteraction: () => void }) {
     dismissKeyboard()
     try {
       await signIn({ username: account.trim(), password }, controller.signal)
-      if (!controller.signal.aborted) setLoggedIn(true)
+      if (!controller.signal.aborted) {
+        setLoggedIn(true)
+        onSignedIn?.()
+      }
     } catch (error) {
       if (!controller.signal.aborted) setError(error instanceof Error ? error.message : "登录失败，请重试。")
     } finally {
