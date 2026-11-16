@@ -588,7 +588,117 @@ test('cover queue is capped and discards pending work for an unseen cover', asyn
   covers.clear()
 })
 
-function mountReader({ initialPage = 1, failure } = {}) {
+test('the WebView bridge installs its handler first and sends only image IDs and URLs', async () => {
+  const sent = [], events = [], effects = [], order = []
+  let handler, disposed = false, root
+  class WebViewController {
+    async addScriptMessageHandler(name, receive) { order.push(name); handler = receive }
+    async loadHTML(html) { order.push('html'); assert.match(html, /local-reader/); return true }
+    async evaluateJavaScript(script) {
+      const match = /^return window\.updateReader\((.*)\)$/.exec(script)
+      sent.push(JSON.parse(match[1]))
+      return true
+    }
+    dispose() { disposed = true }
+  }
+  const hooks = []
+  let cursor = 0
+  const slot = value => {
+    const index = cursor++
+    return index in hooks ? hooks[index] : hooks[index] = value()
+  }
+  const { WebReaderSurface } = load('WebReaderSurface.tsx', {
+    scripting: {
+      WebView: 'WebView', useEffect: effect => effects.push(effect),
+      useRef: value => slot(() => ({ current: value })),
+      useMemo: slot, useObservable: value => slot(() => ({ value, setValue(next) { this.value = next } })),
+    },
+    './web-reader-html': { webReaderHTML: '<main id="local-reader"></main>' },
+  }, { WebViewController })
+  const props = {
+    pages: [{ id: '7:1', url: 'https://example.test/1.jpg', chapter: { id: 7 } }],
+    generation: 2, startID: '7:1', preload: [],
+    onEvent: value => events.push(value), onFailure: () => assert.fail('bridge failed'),
+  }
+  root = WebReaderSurface(props)
+  assert.equal(root.type, 'WebView')
+  const stop = effects[0]()
+  effects[1]()
+  await settle()
+  assert.deepEqual(order, ['reader', 'html'])
+  assert.deepEqual(sent, [{ pages: [{ id: '7:1', url: 'https://example.test/1.jpg' }], key: 2, startID: '7:1', preload: [] }])
+  handler(JSON.stringify({ key: 2, kind: 'position', ids: ['7:1'], end: true }))
+  handler({ key: 2, kind: 'position', ids: [7], end: true })
+  assert.equal(events.length, 1)
+  stop()
+  handler({ key: 2, kind: 'tap' })
+  assert.equal(events.length, 1)
+  assert.equal(disposed, true)
+})
+
+test('reader page script restores position, appends in place, and offers native fallback after a retry', () => {
+  class Element {
+    constructor(tag) { this.tag = tag; this.children = []; this.style = {}; this.scrollTop = 0 }
+    append(...nodes) { nodes.forEach(node => { node.parent = this; this.children.push(node) }) }
+    replaceChildren(...nodes) {
+      this.children.forEach(node => { node.parent = null })
+      this.children = []
+      this.append(...nodes)
+    }
+    addEventListener() {}
+    removeAttribute(name) { delete this[name] }
+    get isConnected() { return this.tag === 'viewport' || Boolean(this.parent?.isConnected) }
+    get offsetTop() {
+      return this.parent.children.slice(0, this.parent.children.indexOf(this))
+        .reduce((height, node) => height + node.offsetHeight, 0)
+    }
+    get offsetHeight() { return this.className === 'page' ? 500 : 800 }
+    get clientHeight() { return 800 }
+    get scrollHeight() { return this.children[0].children.reduce((height, node) => height + node.offsetHeight, 0) }
+  }
+  const events = [], frames = []
+  const viewport = new Element('viewport'), container = new Element('pages')
+  viewport.append(container)
+  const window = {
+    addEventListener() {},
+    webkit: { messageHandlers: { reader: { postMessage: event => events.push(event) } } },
+  }
+  const { webReaderHTML } = load('web-reader-html.ts')
+  const script = /<script>([\s\S]*?)<\/script>/.exec(webReaderHTML)[1]
+  vm.runInNewContext(script, {
+    window, document: {
+      getElementById: id => id === 'viewport' ? viewport : container,
+      createElement: tag => new Element(tag),
+    },
+    requestAnimationFrame: callback => frames.push(callback),
+    performance: { now: () => 100 },
+  })
+  const pages = ['1:1', '1:2', '1:3'].map(id => ({ id, url: 'https://example.test/' + id }))
+  const update = (items, key = 1, startID = '1:3') => window.updateReader({ pages: items, key, startID, preload: [] })
+  function paint() { while (frames.length) frames.shift()() }
+  assert.equal(update(pages), true)
+  assert.equal(viewport.scrollTop, 1600)
+  paint()
+  assert.equal(events.at(-1).ids[0], '1:3')
+  assert.equal(events.at(-1).end, true)
+  const last = container.children.at(-1)
+  last.children[0].onload()
+  assert.equal(events.at(-1).ready, true)
+  update([...pages, { id: '2:1', url: 'https://example.test/4' }])
+  assert.equal(container.children[2], last)
+  assert.equal(container.children.length, 4)
+  update([{ id: '3:1', url: 'https://example.test/failed' }], 2, '3:1')
+  const [image, status] = container.children[0].children
+  image.onerror()
+  status.children[0].onclick()
+  paint()
+  image.onerror()
+  status.children[0].onclick()
+  assert.equal(events.at(-1).kind, 'fallback')
+  assert.equal(events.at(-1).key, 2)
+})
+
+function mountReader({ initialPage = 1, failure, web = false } = {}) {
   const jobs = [], saved = [], hooks = [], rowHooks = [], props = []
   let activeHooks = hooks
   let cursor, cleanup
@@ -622,7 +732,8 @@ function mountReader({ initialPage = 1, failure } = {}) {
   const { ChapterReader } = load('ChapterReader.tsx', {
     scripting: ui, './reader-cache': { ReaderRequests }, './request': { ApiError, isTransientRequestError: () => false },
     './reading-history': { saveReadingRecord: record => saved.push(record), chapterLabel: chapter => chapter.title },
-  })
+    './WebReaderSurface': { WebReaderSurface: 'WebReaderSurface' },
+  }, web ? { WebViewController: class {} } : {})
   const images = Array.from({ length: 12 }, (_, i) => '/' + (i + 1))
   const cache = { images: new Map(images.map(url => [url, { image: {} }])), ratios: new Map() }
   function view() {
@@ -645,6 +756,19 @@ function mountReader({ initialPage = 1, failure } = {}) {
   }
   return { view, scroll, visible, tapImage, jobs, saved, cleanup }
 }
+
+test('WebView visibility saves only a loaded image and native fallback resumes on that page', () => {
+  const reader = mountReader({ initialPage: 5, web: true })
+  const surface = reader.view().props.children[1].props
+  assert.equal(surface.startID, '1:5')
+  assert.equal(reader.jobs.length, 0)
+  surface.onEvent({ key: 0, kind: 'position', ids: ['1:5'], end: false })
+  surface.onEvent({ key: 0, kind: 'image', id: '1:5', ready: true, elapsed: 60 })
+  surface.onFailure()
+  assert.equal(reader.jobs.at(-1).visible[0], '/5')
+  reader.cleanup()
+  assert.equal(reader.saved.at(-1).page, 5)
+})
 
 test('tapping the reader timing button opens and closes the inline diagnostic panel', () => {
   const reader = mountReader()
