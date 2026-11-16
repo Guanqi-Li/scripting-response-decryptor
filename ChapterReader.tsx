@@ -6,7 +6,6 @@ import type { Chapter, Comic, ReaderChapter } from "./catalog"
 import { ChapterDirectoryView, type ChapterDirectoryCache } from "./ChapterDirectoryView"
 import { isTransientRequestError } from "./request"
 import { ReaderRequests, type ImageTiming, type ReaderCache } from "./reader-cache"
-import { WebReaderSurface, type WebReaderEvent } from "./WebReaderSurface"
 import { chapterLabel, saveReadingRecord, type ReadingRecord } from "./reading-history"
 
 type ReaderPage = {
@@ -139,9 +138,6 @@ export function ChapterReader({ book, chapter, initialPage, opening, cache, dire
   const warning = useObservable("")
   const mounted = useRef(true)
   const scrollKey = useObservable(0)
-  const useWebReader = useObservable(typeof WebViewController === "function")
-  const webPreload = useObservable<string[]>([])
-  const webImages = useRef(new Map<string, { ready: boolean; elapsed: number }>())
   const visible = useRef<string[]>([])
   const reachedEnd = useRef<string | null>(null)
   const activePage = useRef<ReaderPage | null>(null)
@@ -203,15 +199,8 @@ export function ChapterReader({ book, chapter, initialPage, opening, cache, dire
     const prefetchState = prefetch.current
     const nextImages = nearEnd && prefetchState?.forChapter === tail.chapter.id
       ? prefetchState.data?.images.slice(0, 3) ?? [] : []
-    if (useWebReader.value) {
-      const urls = nextImages.filter(Boolean)
-      if (urls.length !== webPreload.value.length || urls.some((url, index) => url !== webPreload.value[index])) {
-        webPreload.setValue(urls)
-      }
-    } else {
-      requests.prioritize([...nearby, ...ahead, ...behind].map(page => page.url).concat(nextImages).filter(Boolean),
-        nearby.map(page => page.url).filter(Boolean))
-    }
+    requests.prioritize([...nearby, ...ahead, ...behind].map(page => page.url).concat(nextImages).filter(Boolean),
+      nearby.map(page => page.url).filter(Boolean))
 
     if (nearEnd && prefetchState?.forChapter !== tail.chapter.id) {
       const nextChapter = getAdjacent(tail.chapter, 1)
@@ -268,7 +257,7 @@ export function ChapterReader({ book, chapter, initialPage, opening, cache, dire
   }
 
   function recordVisiblePage(page: ReaderPage) {
-    if (useWebReader.value ? !webImages.current.get(page.id)?.ready : !cache.images.has(page.url)) return
+    if (!cache.images.has(page.url)) return
     if (last.current?.chapter.id === page.chapter.id && last.current.page === page.number) return
     last.current = { book, chapter: page.chapter, page: page.number, pageCount: page.count, readAt: Date.now() }
     clearTimeout(saveTimer.current)
@@ -317,8 +306,6 @@ export function ChapterReader({ book, chapter, initialPage, opening, cache, dire
       const items = makePages(data)
       const start = items[Math.min(items.length, Math.max(1, resumePage)) - 1]
       target.current = start.id
-      webImages.current.clear()
-      if (webPreload.value.length) webPreload.setValue([])
       selected.setValue(data.chapter)
       position.setValue(start.id)
       scrollKey.setValue(scrollKey.value + 1)
@@ -335,8 +322,7 @@ export function ChapterReader({ book, chapter, initialPage, opening, cache, dire
     if (!mounted.current || target.current) return
     const tail = pages.value[pages.value.length - 1]
     if (!tail || reachedEnd.current !== tail.id || (error.value && errorKind.current === "append")) return
-    if (tail.url && (useWebReader.value ? !webImages.current.has(tail.id)
-      : !cache.images.has(tail.url) && !requests.failed.has(tail.url))) return
+    if (tail.url && !cache.images.has(tail.url) && !requests.failed.has(tail.url)) return
     if (getAdjacent(tail.chapter, 1)) {
       if (directoryGap.value !== null) directoryGap.setValue(null)
       void appendChapter()
@@ -396,42 +382,6 @@ export function ChapterReader({ book, chapter, initialPage, opening, cache, dire
     }
   }
 
-  function useNativeReader() {
-    if (!mounted.current || !useWebReader.value) return
-    const id = target.current ?? activePage.current?.id ?? visible.current[0] ?? pages.value[0]?.id
-    useWebReader.setValue(false)
-    webImages.current.clear()
-    target.current = id ?? null
-    activePage.current = null
-    reachedEnd.current = null
-    position.setValue(target.current)
-    if (id) prioritize([id])
-    if (imageTimings.value !== null) imageTimings.setValue(imageTimingText())
-  }
-
-  function receiveWebEvent(event: WebReaderEvent) {
-    if (!mounted.current || !useWebReader.value || event.key !== scrollKey.value) return
-    if (event.kind === "tap") {
-      showControls()
-    } else if (event.kind === "fallback") {
-      useNativeReader()
-    } else if (event.kind === "image") {
-      if (!pageIndex().has(event.id)) return
-      webImages.current.set(event.id, { ready: event.ready, elapsed: event.elapsed })
-      const page = activePage.current
-      if (page?.id === event.id && visible.current.includes(page.id)) recordVisiblePage(page)
-      if (pages.value[pages.value.length - 1]?.id === event.id) maybeAppend()
-      if (controls.value && imageTimings.value !== null) imageTimings.setValue(imageTimingText())
-    } else {
-      const ids = event.ids.filter(id => pageIndex().has(id))
-      if (ids.length) position.setValue(ids[0])
-      reportVisible(ids)
-      const tail = pages.value[pages.value.length - 1]
-      reachedEnd.current = event.end && tail && ids.includes(tail.id) ? tail.id : null
-      maybeAppend()
-    }
-  }
-
   function imageTimingText() {
     const items = pages.value
     const currentID = target.current ?? activePage.current?.id ?? visible.current[0]
@@ -442,11 +392,8 @@ export function ChapterReader({ book, chapter, initialPage, opening, cache, dire
       const timing = requests.imageTiming(page.url)
       const label = `${chapterLabel(page.chapter)} · 第 ${page.number} 张`
       const isCurrent = first + offset === index
-      const webImage = webImages.current.get(page.id)
-      const detail = useWebReader.value
-        ? webImage ? `WebView ${webImage.ready ? "已就绪" : "失败"} · 总等待 ${webImage.elapsed} ms` : "WebView 等待加载"
-        : timing ? describeImageTiming(timing, now)
-          : cache.images.has(page.url) ? "来自内存缓存" : page.url ? "尚未入队" : "图片地址无效"
+      const detail = timing ? describeImageTiming(timing, now)
+        : cache.images.has(page.url) ? "来自内存缓存" : page.url ? "尚未入队" : "图片地址无效"
       return `${isCurrent ? "当前 · " : ""}${label}\n${detail}`
     })
     return lines.join("\n\n") || "本章还没有图片加载记录。"
@@ -511,10 +458,7 @@ export function ChapterReader({ book, chapter, initialPage, opening, cache, dire
     <ZStack frame={{ maxWidth: "infinity", maxHeight: "infinity" }} background="black"
       statusBarHidden persistentSystemOverlays="hidden">
       <Rectangle fill="black" ignoresSafeArea={{ regions: "container", edges: "all" }} />
-      {items.length ? useWebReader.value ? (
-        <WebReaderSurface pages={items} generation={scrollKey.value} startID={target.current} preload={webPreload.value}
-          onEvent={receiveWebEvent} onFailure={useNativeReader} />
-      ) : (
+      {items.length ? (
         <GeometryReader ignoresSafeArea={{ regions: "container", edges: "all" }}>
           {geometry => (
             <ScrollView
