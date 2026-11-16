@@ -177,14 +177,17 @@ export function ComicGrid({ entry, covers, loadPage, openBook, initialPosition, 
 
   return (
     <ScrollView
+      contentShape="rect"
+      simultaneousGesture={typeof TapGesture === "function" ? TapGesture().onEnded(onInteraction) : undefined}
       scrollPosition={{ value: position, anchor: "top" }}
       scrollBounceBehavior="always"
       onScrollPhaseChange={(previous, next, { geometry }) => {
-        if (next === "tracking" || (next === "interacting" && previous !== "tracking")) {
+        const beganTouch = next === "tracking" || (next === "interacting" && previous !== "tracking")
+        if (beganTouch) {
           drag.current.startedAtBottom = distanceFromBottom(geometry) <= 3
         }
         drag.current.interacting = next === "interacting"
-        if (drag.current.interacting) onInteraction()
+        if (beganTouch) onInteraction()
       }}
       onScrollGeometryChange={{
         of: "geometry",

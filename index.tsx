@@ -186,9 +186,11 @@ function MainView() {
         <VStack spacing={0} opacity={isHome ? 1 : 0} allowsHitTesting={isHome} accessibilityHidden={!isHome}>
           {categories?.length ? <ScrollView
             axes="horizontal"
+            contentShape="rect"
+            simultaneousGesture={typeof TapGesture === "function" ? TapGesture().onEnded(dismissNavigation) : undefined}
             scrollIndicator="hidden"
             fixedSize={{ horizontal: false, vertical: true }}
-            onScrollPhaseChange={(_, phase) => { if (phase === "interacting") dismissNavigation() }}
+            onScrollPhaseChange={(_, phase) => { if (phase === "tracking" || phase === "interacting") dismissNavigation() }}
           >
             <HStack spacing={28} padding={{ horizontal: 16 }}>
               {categories.map(category => {

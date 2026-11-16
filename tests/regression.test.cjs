@@ -106,6 +106,27 @@ test('opening or dismissing the navigation preserves the loaded grid and its scr
   assert.equal(nav(updated).props.accessibilityLabel, '展开导航')
 })
 
+test('catalog and history scroll views observe taps on their own blank space', () => {
+  const ui = {
+    ScrollView: 'ScrollView',
+    useObservable: value => ({ value }),
+    useRef: current => ({ current }),
+    useEffect() {},
+  }
+  const globals = { TapGesture: () => ({ onEnded: action => action }) }
+  const { ComicGrid } = load('ComicGrid.tsx', { scripting: ui }, globals)
+  const { ReadingHistoryView } = load('ReadingHistoryView.tsx', { scripting: ui }, globals)
+  let dismissals = 0
+  const onInteraction = () => { dismissals++ }
+  const catalog = ComicGrid({ onInteraction }).props
+  const history = ReadingHistoryView({ records: [], onInteraction }).props
+  catalog.simultaneousGesture()
+  history.simultaneousGesture()
+  assert.equal(dismissals, 2)
+  history.onScrollPhaseChange('idle', 'tracking')
+  assert.equal(dismissals, 3)
+})
+
 test('the login page dismisses the keyboard and navigation, and offers ordinary password input on demand', () => {
   const hooks = []
   let cursor = 0, hidden = 0, dismissed = 0

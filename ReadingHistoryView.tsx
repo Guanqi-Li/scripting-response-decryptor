@@ -13,8 +13,10 @@ export function ReadingHistoryView({ records, error, retry, covers, openBook, on
 }) {
   return (
     <ScrollView
+      contentShape="rect"
+      simultaneousGesture={typeof TapGesture === "function" ? TapGesture().onEnded(onInteraction) : undefined}
       scrollBounceBehavior="always"
-      onScrollPhaseChange={(_, phase) => { if (phase === "interacting") onInteraction() }}
+      onScrollPhaseChange={(_, phase) => { if (phase === "tracking" || phase === "interacting") onInteraction() }}
     >
       <LazyVStack alignment="leading" spacing={0} padding={{ horizontal: 16, bottom: 80 }}>
         {error ? <VStack alignment="leading" spacing={6}>
