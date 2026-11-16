@@ -1,6 +1,6 @@
 import {
   Button, GeometryReader, HStack, Image, LazyVStack, Navigation, NavigationStack,
-  ProgressView, Rectangle, ScrollView, Spacer, Text, VStack, ZStack, useEffect, useObservable, useRef,
+  ProgressView, Rectangle, ScrollView, ScrollViewReader, Spacer, Text, VStack, ZStack, useEffect, useObservable, useRef,
 } from "scripting"
 import type { Chapter, Comic, ReaderChapter } from "./catalog"
 import { ChapterDirectoryView, type ChapterDirectoryCache } from "./ChapterDirectoryView"
@@ -39,7 +39,7 @@ function describeImageTiming(timing: Readonly<ImageTiming>, now: number): string
   return `${status} · ${parts.join(" / ")}`
 }
 
-function ReaderImageRow({ page, cache, requests, width, placeholderHeight, previousURL, nextURL, showControls }: {
+function ReaderImageRow({ page, cache, requests, width, placeholderHeight, previousURL, nextURL, showControls, updateRow }: {
   page: ReaderPage
   cache: ReaderCache
   requests: ReaderRequests
@@ -48,17 +48,25 @@ function ReaderImageRow({ page, cache, requests, width, placeholderHeight, previ
   previousURL?: string
   nextURL?: string
   showControls: () => void
+  updateRow: (id: string, update: () => void) => void
 }) {
   const update = useObservable(0)
-  useEffect(() => {
-    const invalidate = () => update.setValue(update.value + 1)
-    const stop = requests.observe(page.url, invalidate)
-    invalidate()
-    return stop
-  }, [page.url, requests])
-
   void update.value
   const loaded = cache.images.get(page.url)
+  const failed = requests.failed.has(page.url)
+  useEffect(() => {
+    let mounted = true
+    const invalidate = () => { if (mounted) update.setValue(update.value + 1) }
+    const stop = requests.observe(page.url, () => updateRow(page.id, invalidate))
+    if (cache.images.get(page.url) !== loaded || requests.failed.has(page.url) !== failed) {
+      updateRow(page.id, invalidate)
+    }
+    return () => {
+      mounted = false
+      stop()
+    }
+  }, [page.url, requests])
+
   const measured = cache.ratios.get(page.url)
   const expected = useRef((previousURL && cache.ratios.get(previousURL)) || (nextURL && cache.ratios.get(nextURL)))
   const ratio = measured || expected.current
@@ -68,7 +76,7 @@ function ReaderImageRow({ page, cache, requests, width, placeholderHeight, previ
       {loaded ? (
         <Image image={loaded.image} resizable frame={{ width, height }}
           contentShape="rect" onTapGesture={showControls} />
-      ) : requests.failed.has(page.url)
+      ) : failed
         ? <Button title={`重试第 ${page.number} 张`} action={() => requests.retry(page.url)} />
         : !page.url ? <Text foregroundStyle="white">第 {page.number} 张图片地址无效</Text>
         : <ProgressView tint="white" />}
@@ -124,7 +132,6 @@ export function ChapterReader({ book, chapter, initialPage, opening, cache, dire
   const openingError = "error" in opening ? opening.error : undefined
   const pages = useObservable(initialPages.current)
   const selected = useObservable(initialTarget?.chapter ?? chapter)
-  const position = useObservable<string | null>(initialTarget?.id ?? null)
   const controls = useObservable(false)
   const imageTimings = useObservable<string | null>(null)
   const busy = useObservable(false)
@@ -138,6 +145,9 @@ export function ChapterReader({ book, chapter, initialPage, opening, cache, dire
   const warning = useObservable("")
   const mounted = useRef(true)
   const scrollKey = useObservable(0)
+  const restoredScrollKey = useRef<number | null>(null)
+  const moving = useRef(false)
+  const deferredRows = useRef(new Map<string, () => void>())
   const visible = useRef<string[]>([])
   const reachedEnd = useRef<string | null>(null)
   const activePage = useRef<ReaderPage | null>(null)
@@ -242,12 +252,18 @@ export function ChapterReader({ book, chapter, initialPage, opening, cache, dire
     if (!mounted.current) return
     const changed = ids.length !== visible.current.length || ids.some(id => !visible.current.includes(id))
     visible.current = ids
-    if (changed) prioritize(ids)
+    if (changed) {
+      for (const id of ids) {
+        const update = deferredRows.current.get(id)
+        deferredRows.current.delete(id)
+        update?.()
+      }
+      prioritize(ids)
+    }
     const restore = target.current
     if (restore && !ids.includes(restore)) return
     target.current = null
-    const current = position.value
-    if (restore || (current && ids.includes(current))) confirmPage(restore ?? current)
+    if (restore) confirmPage(restore)
     else if (!activePage.current || !ids.includes(activePage.current.id)) {
       const positions = pageIndex()
       const first = ids.reduce<string | null>((best, id) =>
@@ -260,12 +276,33 @@ export function ChapterReader({ book, chapter, initialPage, opening, cache, dire
     if (!cache.images.has(page.url)) return
     if (last.current?.chapter.id === page.chapter.id && last.current.page === page.number) return
     last.current = { book, chapter: page.chapter, page: page.number, pageCount: page.count, readAt: Date.now() }
-    clearTimeout(saveTimer.current)
-    saveTimer.current = setTimeout(save, 850)
+    if (!moving.current) scheduleSave()
   }
 
-  function onPositionChanged(id: string | null) {
-    if (mounted.current && !target.current) confirmPage(id)
+  function scheduleSave() {
+    clearTimeout(saveTimer.current)
+    if (last.current) saveTimer.current = setTimeout(save, 850)
+  }
+
+  function updateRow(id: string, update: () => void) {
+    if (moving.current && !visible.current.includes(id)) {
+      deferredRows.current.set(id, update)
+    } else {
+      deferredRows.current.delete(id)
+      update()
+    }
+  }
+
+  function setScrollMoving(next: boolean) {
+    if (moving.current === next) return
+    moving.current = next
+    if (next) {
+      clearTimeout(saveTimer.current)
+    } else {
+      for (const update of deferredRows.current.values()) update()
+      deferredRows.current.clear()
+      scheduleSave()
+    }
   }
 
   function hideControlsLater() {
@@ -298,6 +335,8 @@ export function ChapterReader({ book, chapter, initialPage, opening, cache, dire
       last.current = null
       visible.current = []
       activePage.current = null
+      deferredRows.current.clear()
+      moving.current = false
       reachedEnd.current = null
       clearTimeout(prefetchTimer.current)
       prefetch.current = null
@@ -307,7 +346,6 @@ export function ChapterReader({ book, chapter, initialPage, opening, cache, dire
       const start = items[Math.min(items.length, Math.max(1, resumePage)) - 1]
       target.current = start.id
       selected.setValue(data.chapter)
-      position.setValue(start.id)
       scrollKey.setValue(scrollKey.value + 1)
       pages.setValue(items)
       prioritize([start.id])
@@ -436,19 +474,19 @@ export function ChapterReader({ book, chapter, initialPage, opening, cache, dire
       if (pages.value[pages.value.length - 1]?.url === url) maybeAppend()
       if (controls.value && imageTimings.value !== null) imageTimings.setValue(imageTimingText())
     }
-    position.subscribe(onPositionChanged)
     if (initialTarget) prioritize([initialTarget.id])
     else retry.current = () => { void openChapter(chapter, initialPage) }
     return () => {
-      position.unsubscribe(onPositionChanged)
       mounted.current = false
       clearTimeout(hideTimer.current)
       save()
       stopRequests()
+      deferredRows.current.clear()
     }
   }, [])
 
   const items = pages.value
+  const chapterScrollKey = scrollKey.value
   const tail = items[items.length - 1]
   const endMarker = tail ? `chapter-end:${tail.id}` : null
   const previous = controls.value ? getAdjacent(selected.value, -1) : undefined
@@ -461,48 +499,58 @@ export function ChapterReader({ book, chapter, initialPage, opening, cache, dire
       {items.length ? (
         <GeometryReader ignoresSafeArea={{ regions: "container", edges: "all" }}>
           {geometry => (
-            <ScrollView
-              key={scrollKey.value}
-              background="black"
-              scrollBounceBehavior="always"
-              scrollPosition={{ value: position, anchor: "top" }}
-              ignoresSafeArea={{ regions: "container", edges: "all" }}
-              onScrollTargetVisibilityChange={{
-                idType: "string", threshold: 0,
-                onChanged: ids => {
-                  if (!tail || pages.value[pages.value.length - 1]?.id !== tail.id) return
-                  const pageIDs = ids.filter((id): id is string => typeof id === "string" && id !== endMarker)
-                  reportVisible(pageIDs)
-                  if (target.current) return
-                  reachedEnd.current = endMarker !== null && ids.includes(endMarker) ? tail.id : null
-                  maybeAppend()
-                },
-              }}
-              onScrollPhaseChange={(previous, nextPhase, { geometry }) => {
-                if (nextPhase === "interacting" && target.current) {
-                  target.current = null
-                  reportVisible(visible.current)
-                }
-                if (previous !== "interacting" && previous !== "decelerating") return
-                if (!tail || target.current || pages.value[pages.value.length - 1]?.id !== tail.id || !visible.current.includes(tail.id)) return
-                const bottom = Math.max(-geometry.contentInsets.top,
-                  geometry.contentSize.height - geometry.containerSize.height + geometry.contentInsets.bottom)
-                if (geometry.contentOffset.y < bottom - 2) return
-                reachedEnd.current = tail.id
-                maybeAppend()
-              }}
-            >
-              <LazyVStack spacing={0} scrollTargetLayout>
-                {items.map((page, index) => (
-                  <VStack key={page.id} spacing={0}>
-                    <ReaderImageRow page={page} cache={cache} requests={requests} width={geometry.size.width}
-                      placeholderHeight={geometry.size.height} previousURL={items[index - 1]?.url}
-                      nextURL={items[index + 1]?.url} showControls={showControls} />
-                  </VStack>
-                ))}
-                {endMarker !== null ? <Rectangle key={endMarker} fill="black" frame={{ height: 1 }} accessibilityHidden /> : null}
-              </LazyVStack>
-            </ScrollView>
+            <ScrollViewReader>
+              {proxy => (
+                <ScrollView
+                  key={chapterScrollKey}
+                  background="black"
+                  scrollBounceBehavior="always"
+                  onAppear={() => {
+                    const id = target.current
+                    if (!id || scrollKey.value !== chapterScrollKey || restoredScrollKey.current === chapterScrollKey) return
+                    restoredScrollKey.current = chapterScrollKey
+                    if (id !== items[0]?.id) proxy.scrollTo(id, "top")
+                  }}
+                  ignoresSafeArea={{ regions: "container", edges: "all" }}
+                  onScrollTargetVisibilityChange={{
+                    idType: "string", threshold: 0,
+                    onChanged: ids => {
+                      if (!tail || pages.value[pages.value.length - 1]?.id !== tail.id) return
+                      const pageIDs = ids.filter((id): id is string => typeof id === "string" && id !== endMarker)
+                      reportVisible(pageIDs)
+                      if (target.current) return
+                      reachedEnd.current = endMarker !== null && ids.includes(endMarker) ? tail.id : null
+                      maybeAppend()
+                    },
+                  }}
+                  onScrollPhaseChange={(previous, nextPhase, { geometry }) => {
+                    setScrollMoving(nextPhase === "tracking" || nextPhase === "interacting" || nextPhase === "decelerating")
+                    if (nextPhase === "interacting" && target.current) {
+                      target.current = null
+                      reportVisible(visible.current)
+                    }
+                    if (previous !== "interacting" && previous !== "decelerating") return
+                    if (!tail || target.current || pages.value[pages.value.length - 1]?.id !== tail.id || !visible.current.includes(tail.id)) return
+                    const bottom = Math.max(-geometry.contentInsets.top,
+                      geometry.contentSize.height - geometry.containerSize.height + geometry.contentInsets.bottom)
+                    if (geometry.contentOffset.y < bottom - 2) return
+                    reachedEnd.current = tail.id
+                    maybeAppend()
+                  }}
+                >
+                  <LazyVStack spacing={0} scrollTargetLayout>
+                    {items.map((page, index) => (
+                      <VStack key={page.id} spacing={0}>
+                        <ReaderImageRow page={page} cache={cache} requests={requests} width={geometry.size.width}
+                          placeholderHeight={geometry.size.height} previousURL={items[index - 1]?.url}
+                          nextURL={items[index + 1]?.url} showControls={showControls} updateRow={updateRow} />
+                      </VStack>
+                    ))}
+                    {endMarker !== null ? <Rectangle key={endMarker} fill="black" frame={{ height: 1 }} accessibilityHidden /> : null}
+                  </LazyVStack>
+                </ScrollView>
+              )}
+            </ScrollViewReader>
           )}
         </GeometryReader>
       ) : !error.value ? (

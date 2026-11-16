@@ -600,7 +600,7 @@ test('cover queue is capped and discards pending work for an unseen cover', asyn
 })
 
 function mountReader({ initialPage = 1, failure } = {}) {
-  const jobs = [], saved = [], hooks = [], rowHooks = [], props = []
+  const jobs = [], saved = [], hooks = [], rowHooks = [], props = [], restored = []
   let activeHooks = hooks
   let cursor, cleanup
   const slot = value => {
@@ -614,7 +614,7 @@ function mountReader({ initialPage = 1, failure } = {}) {
     useEffect: effect => props.push(effect),
   }
   for (const type of ['Button', 'GeometryReader', 'HStack', 'Image', 'LazyVStack', 'NavigationStack',
-    'ProgressView', 'Rectangle', 'ScrollView', 'Spacer', 'Text', 'VStack', 'ZStack']) ui[type] = type
+    'ProgressView', 'Rectangle', 'ScrollView', 'ScrollViewReader', 'Spacer', 'Text', 'VStack', 'ZStack']) ui[type] = type
   class ReaderRequests {
     failed = new Set()
     prioritize(urls, visible) { jobs.push({ urls, visible }) }
@@ -647,6 +647,7 @@ function mountReader({ initialPage = 1, failure } = {}) {
   view()
   cleanup = props[0]()
   const scroll = () => view().props.children[1].props.children({ size: { width: 440, height: 950 } })
+    .props.children({ scrollTo: (id, anchor) => restored.push({ id, anchor }) })
   const visible = ids => scroll().props.onScrollTargetVisibilityChange.onChanged(ids)
   const tapImage = () => {
     const component = scroll().props.children.props.children.flat()[0].props.children
@@ -654,7 +655,7 @@ function mountReader({ initialPage = 1, failure } = {}) {
     activeHooks = rowHooks
     component.type(component.props).props.children.props.onTapGesture()
   }
-  return { view, scroll, visible, tapImage, jobs, saved, cleanup }
+  return { view, scroll, visible, tapImage, jobs, saved, restored, cleanup }
 }
 
 test('tapping the reader timing button opens and closes the inline diagnostic panel', () => {
@@ -674,6 +675,35 @@ test('tapping the reader timing button opens and closes the inline diagnostic pa
   } finally {
     reader.cleanup()
   }
+})
+
+test('resume scrolls to the saved image once, without a live scroll position binding', () => {
+  const reader = mountReader({ initialPage: 8 })
+  const scroll = reader.scroll().props
+  assert.equal(scroll.scrollPosition, undefined)
+  scroll.onAppear()
+  scroll.onAppear()
+  assert.deepEqual(reader.restored, [{ id: '1:8', anchor: 'top' }])
+  reader.cleanup()
+})
+
+test('offscreen image updates wait for the reader to settle without blocking the visible image', () => {
+  const reader = mountReader()
+  reader.visible(['1:1'])
+  const scroll = reader.scroll().props
+  const { updateRow } = scroll.children.props.children.flat()[0].props.children.props
+  const updates = []
+  scroll.onScrollPhaseChange('idle', 'tracking', { geometry: {} })
+  scroll.onScrollPhaseChange('tracking', 'interacting', { geometry: {} })
+  updateRow('1:2', () => updates.push('first offscreen update'))
+  updateRow('1:2', () => updates.push('latest offscreen update'))
+  updateRow('1:1', () => updates.push('visible update'))
+  assert.deepEqual(updates, ['visible update'])
+  scroll.onScrollPhaseChange('interacting', 'decelerating', { geometry: {} })
+  assert.deepEqual(updates, ['visible update'])
+  scroll.onScrollPhaseChange('decelerating', 'idle', { geometry: {} })
+  assert.deepEqual(updates, ['visible update', 'latest offscreen update'])
+  reader.cleanup()
 })
 
 test('resume waits for confirmation without blocking downloads of actual visible pages', () => {
