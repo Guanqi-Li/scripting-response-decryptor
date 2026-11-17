@@ -31,10 +31,11 @@ function describeImageTiming(timing: Readonly<ImageTiming>, now: number): string
   if (timing.startedAt !== undefined) {
     parts.push(`下载 ${elapsed(timing.startedAt, timing.receivedAt ?? end)}`)
   }
-  if (timing.receivedAt !== undefined) parts.push(`处理 ${elapsed(timing.receivedAt, end)}`)
+  if (timing.processingAt !== undefined) parts.push(`处理 ${elapsed(timing.processingAt, end)}`)
 
   const status = timing.outcome === "ready" ? "已就绪" : timing.outcome === "failed" ? "失败"
-    : timing.outcome === "cancelled" ? "已取消" : timing.receivedAt !== undefined ? "处理中"
+    : timing.outcome === "cancelled" ? "已取消" : timing.processingAt !== undefined ? "处理中"
+    : timing.receivedAt !== undefined ? "已下载"
     : timing.startedAt !== undefined ? "下载中" : "排队中"
   return `${status} · ${parts.join(" / ")}`
 }
@@ -155,7 +156,7 @@ export function ChapterReader({ book, chapter, initialPage, opening, cache, dire
   const target = useRef<string | null>(initialTarget?.id ?? null)
   const last = useRef<ReadingRecord | null>(null)
   const lastSaved = useRef("")
-  const prefetch = useRef<{ forChapter: number; data?: ReaderChapter } | null>(null)
+  const prefetch = useRef<{ forChapter: number } | null>(null)
   const prefetchTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const retry = useRef<(() => void) | null>(null)
   const saveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
@@ -194,6 +195,14 @@ export function ChapterReader({ book, chapter, initialPage, opening, cache, dire
     return indexed.current.byID
   }
 
+  function queueChapterImages(next: string[] = []) {
+    requests.queueImages([...pages.value.map(page => page.url), ...next])
+  }
+
+  function reachedPrefetchPoint(page: ReaderPage, tail: ReaderPage): boolean {
+    return page.chapter.id === tail.chapter.id && page.number * 3 >= page.count * 2
+  }
+
   function prioritize(ids: string[]) {
     const items = pages.value
     const positions = pageIndex()
@@ -205,31 +214,30 @@ export function ChapterReader({ book, chapter, initialPage, opening, cache, dire
     const ahead = items.slice(end + 1, end + 6)
     const behind = items.slice(Math.max(0, start - 2), start).reverse()
     const tail = items[items.length - 1]
-    const nearEnd = items.length - 1 - end <= 5
+    const nearEnd = reachedPrefetchPoint(items[end], tail)
     const prefetchState = prefetch.current
-    const nextImages = nearEnd && prefetchState?.forChapter === tail.chapter.id
-      ? prefetchState.data?.images.slice(0, 3) ?? [] : []
-    requests.prioritize([...nearby, ...ahead, ...behind].map(page => page.url).concat(nextImages).filter(Boolean),
+    requests.prioritize([...nearby, ...ahead, ...behind].map(page => page.url).filter(Boolean),
       nearby.map(page => page.url).filter(Boolean))
 
     if (nearEnd && prefetchState?.forChapter !== tail.chapter.id) {
       const nextChapter = getAdjacent(tail.chapter, 1)
       if (!nextChapter) return
-      const waiting: { forChapter: number; data?: ReaderChapter } = { forChapter: tail.chapter.id }
+      const waiting = { forChapter: tail.chapter.id }
       prefetch.current = waiting
 
       const preload = async (attempt: number) => {
         try {
           const data = await requests.chapter(nextChapter)
           if (!mounted.current || prefetch.current !== waiting) return
-          waiting.data = data
-          prioritize(visible.current.length ? visible.current : target.current ? [target.current] : [])
+          queueChapterImages(data.images)
         } catch (error) {
           if (!mounted.current || prefetch.current !== waiting || attempt > 0 || !isTransientRequestError(error)) return
           prefetchTimer.current = setTimeout(() => {
-            const tailIndex = pageIndex().get(tail.id)
-            if (prefetch.current === waiting && tailIndex !== undefined &&
-              visible.current.some(id => (pageIndex().get(id) ?? -1) >= tailIndex - 5)) void preload(1)
+            const ids = visible.current.length ? visible.current : target.current ? [target.current] : []
+            if (prefetch.current === waiting && ids.some(id => {
+              const index = pageIndex().get(id)
+              return index !== undefined && reachedPrefetchPoint(pages.value[index], tail)
+            })) void preload(1)
             else if (prefetch.current === waiting) prefetch.current = null
           }, 700)
         }
@@ -348,6 +356,7 @@ export function ChapterReader({ book, chapter, initialPage, opening, cache, dire
       selected.setValue(data.chapter)
       scrollKey.setValue(scrollKey.value + 1)
       pages.setValue(items)
+      queueChapterImages()
       prioritize([start.id])
     } catch (cause) {
       setChapterError(cause, "open")
@@ -383,6 +392,7 @@ export function ChapterReader({ book, chapter, initialPage, opening, cache, dire
       if (!mounted.current) return
       reachedEnd.current = null
       pages.setValue([...items, ...makePages(data)])
+      queueChapterImages()
       prioritize(visible.current)
     } catch (cause) {
       setChapterError(cause, "append")
@@ -474,8 +484,10 @@ export function ChapterReader({ book, chapter, initialPage, opening, cache, dire
       if (pages.value[pages.value.length - 1]?.url === url) maybeAppend()
       if (controls.value && imageTimings.value !== null) imageTimings.setValue(imageTimingText())
     }
-    if (initialTarget) prioritize([initialTarget.id])
-    else retry.current = () => { void openChapter(chapter, initialPage) }
+    if (initialTarget) {
+      queueChapterImages()
+      prioritize([initialTarget.id])
+    } else retry.current = () => { void openChapter(chapter, initialPage) }
     return () => {
       mounted.current = false
       clearTimeout(hideTimer.current)

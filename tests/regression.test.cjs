@@ -523,30 +523,62 @@ test('a 33-chapter directory publishes the whole list without showing page one o
   unmount()
 })
 
-test('visible pages take one stale download slot, then retry transient prefetch once', async () => {
+test('whole chapters download strictly in order and offscreen originals are reused from temporary files', async () => {
+  const jobs = [], files = new Map(), removed = []
+  const { ReaderCache, ReaderRequests } = load('reader-cache.ts', {}, {
+    fetch: (url, { signal }) => new Promise((resolve, reject) => {
+      jobs.push({ url, signal, resolve })
+      signal.addEventListener('abort', () => reject(Error('aborted')), { once: true })
+    }),
+    FileManager: {
+      temporaryDirectory: '/tmp', async createDirectory() {},
+      async writeAsData(path, data) { files.set(path, data) },
+      async readAsData(path) { return files.get(path) },
+      async remove(path) { removed.push(path) },
+    },
+    UIImage: { fromData: () => ({ width: 100, height: 100, scale: 1 }) },
+  })
+  const cache = new ReaderCache()
+  const requests = new ReaderRequests(cache, 7)
+  const urls = ['/1', '/2', '/3', '/4', '/5', '/6']
+  requests.queueImages(urls.slice(0, 3))
+  requests.prioritize(['/3', '/1'], ['/3'])
+  requests.queueImages(urls)
+  for (let i = 0; i < urls.length; i++) {
+    assert.deepEqual(jobs.map(job => job.url), urls.slice(0, i + 1))
+    jobs[i].resolve({ ok: true, data: async () => ({ page: i + 1 }) })
+    await settle()
+  }
+  assert.equal(files.size, urls.length)
+  assert.equal(cache.images.has('/6'), false)
+  requests.prioritize(['/6'], ['/6'])
+  await settle()
+  assert.equal(cache.images.has('/6'), true)
+  assert.deepEqual(jobs.map(job => job.url), urls)
+  requests.close()
+  await settle()
+  assert.equal(removed.length, 1)
+  assert.match(removed[0], /^\/tmp\/aimanhua-reader-/)
+})
+
+test('a transient retry completes the current page before starting the next page', async () => {
   const jobs = []
   const { ReaderCache, ReaderRequests } = load('reader-cache.ts', {}, {
+    setTimeout: callback => callback(),
     fetch: (url, { signal }) => new Promise((resolve, reject) => {
       jobs.push({ url, signal, resolve })
       signal.addEventListener('abort', () => reject(Error('aborted')), { once: true })
     }),
   })
   const requests = new ReaderRequests(new ReaderCache(), 7)
-  requests.prioritize(['/a', '/b', '/c'])
-  requests.prioritize(['/visible', '/ahead'], ['/visible'])
-  assert.equal(jobs.filter(job => job.signal.aborted).length, 1)
+  requests.queueImages(['/1', '/2'])
+  jobs[0].resolve({ ok: false, status: 503 })
   await settle()
-  const visible = jobs.find(job => job.url === '/visible')
-  assert.ok(visible)
-  visible.resolve({ ok: false, status: 503 })
+  assert.deepEqual(jobs.map(job => job.url), ['/1', '/1'])
+  jobs[1].resolve({ ok: false, status: 503 })
   await settle()
-  requests.prioritize(['/ahead', '/visible'], ['/visible'])
-  await settle()
-  assert.equal(jobs.filter(job => job.url === '/visible').length, 2)
-  jobs.filter(job => job.url === '/visible')[1].resolve({ ok: false, status: 503 })
-  await settle()
-  requests.prioritize(['/visible', '/ahead'], ['/visible'])
-  assert.equal(jobs.filter(job => job.url === '/visible').length, 2)
+  assert.deepEqual(jobs.map(job => job.url), ['/1', '/1', '/2'])
+  assert.equal(requests.failed.has('/1'), true)
   requests.close()
 })
 
@@ -566,7 +598,8 @@ test('image diagnostics distinguish queue time, download time, and native image 
   })
   const cache = new ReaderCache()
   const requests = new ReaderRequests(cache, 7)
-  requests.prioritize(['/1', '/2', '/3', '/4'], ['/1'])
+  requests.queueImages(['/1', '/2', '/3', '/4'])
+  requests.prioritize(['/1'], ['/1'])
   assert.equal(requests.imageTiming('/4').queuedAt, 100)
   assert.equal(requests.imageTiming('/4').startedAt, undefined)
 
@@ -574,9 +607,10 @@ test('image diagnostics distinguish queue time, download time, and native image 
   jobs.get('/1')({ ok: true, data: async () => { now = 190; return {} } })
   await settle()
   assert.deepEqual({ ...requests.imageTiming('/1') }, {
-    queuedAt: 100, startedAt: 100, receivedAt: 190, finishedAt: 200, outcome: 'ready',
+    queuedAt: 100, startedAt: 100, receivedAt: 190, processingAt: 190, finishedAt: 200, outcome: 'ready',
   })
-  assert.equal(requests.imageTiming('/4').startedAt, 200)
+  assert.equal(requests.imageTiming('/2').startedAt, 190)
+  assert.equal(requests.imageTiming('/4').startedAt, undefined)
   requests.close()
   assert.equal(requests.imageTiming('/1'), undefined)
 })
@@ -600,7 +634,7 @@ test('cover queue is capped and discards pending work for an unseen cover', asyn
 })
 
 function mountReader({ initialPage = 1, failure } = {}) {
-  const jobs = [], saved = [], hooks = [], rowHooks = [], props = [], restored = []
+  const jobs = [], saved = [], hooks = [], rowHooks = [], props = [], restored = [], orders = [], chapterRequests = []
   let activeHooks = hooks
   let cursor, cleanup
   const slot = value => {
@@ -618,14 +652,16 @@ function mountReader({ initialPage = 1, failure } = {}) {
   class ReaderRequests {
     failed = new Set()
     prioritize(urls, visible) { jobs.push({ urls, visible }) }
+    queueImages(urls) { orders.push(Array.from(urls)) }
     imageTiming() { return undefined }
     async chapter(chapter) {
+      chapterRequests.push(chapter.id)
       if (failure) {
         const error = failure
         failure = null
         throw error
       }
-      return { chapter, images: ['/next.jpg'] }
+      return { chapter, images: ['/next-1.jpg', '/next-2.jpg', '/next-3.jpg'] }
     }
     close() {}
   }
@@ -655,7 +691,7 @@ function mountReader({ initialPage = 1, failure } = {}) {
     activeHooks = rowHooks
     component.type(component.props).props.children.props.onTapGesture()
   }
-  return { view, scroll, visible, tapImage, jobs, saved, restored, cleanup }
+  return { view, scroll, visible, tapImage, jobs, saved, restored, orders, chapterRequests, cleanup }
 }
 
 test('tapping the reader timing button opens and closes the inline diagnostic panel', () => {
@@ -675,6 +711,20 @@ test('tapping the reader timing button opens and closes the inline diagnostic pa
   } finally {
     reader.cleanup()
   }
+})
+
+test('the reader queues the whole current chapter and preloads all next-chapter images at two thirds', async () => {
+  const reader = mountReader()
+  const current = Array.from({ length: 12 }, (_, index) => '/' + (index + 1))
+  assert.deepEqual(reader.orders, [current])
+  reader.visible(['1:1'])
+  reader.visible(['1:7'])
+  assert.deepEqual(reader.chapterRequests, [])
+  reader.visible(['1:8'])
+  await settle()
+  assert.deepEqual(reader.chapterRequests, [2])
+  assert.deepEqual(reader.orders.at(-1), [...current, '/next-1.jpg', '/next-2.jpg', '/next-3.jpg'])
+  reader.cleanup()
 })
 
 test('resume scrolls to the saved image once, without a live scroll position binding', () => {
@@ -723,7 +773,7 @@ test('a transient prefetch failure does not prevent automatic append at the end'
   await settle()
   reader.visible(['1:12', 'chapter-end:1:12'])
   await settle()
-  assert.equal(reader.scroll().props.children.props.children.flat().at(-1).key, 'chapter-end:2:1')
+  assert.equal(reader.scroll().props.children.props.children.flat().at(-1).key, 'chapter-end:2:3')
   reader.cleanup()
 })
 
@@ -739,7 +789,7 @@ test('manual chapter error leaves automatic append available for the current cha
   assert.match(reader.view().props.children[2].props.children[0].props.children, /manual request failed/)
   reader.visible(['1:12', 'chapter-end:1:12'])
   await settle()
-  assert.equal(reader.scroll().props.children.props.children.flat().at(-1).key, 'chapter-end:2:1')
+  assert.equal(reader.scroll().props.children.props.children.flat().at(-1).key, 'chapter-end:2:3')
   reader.cleanup()
 })
 

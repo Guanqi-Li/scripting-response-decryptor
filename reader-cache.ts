@@ -5,10 +5,11 @@ export type ImageTiming = {
   queuedAt: number
   startedAt?: number
   receivedAt?: number
+  processingAt?: number
   finishedAt?: number
   outcome?: "ready" | "failed" | "cancelled"
 }
-type Download = { url: string; controller: AbortController; timing: ImageTiming }
+type ImageSource = { path: string } | { data: Data }
 
 export class ReaderCache {
   readonly chapters = new Map<number, ReaderChapter>()
@@ -49,10 +50,15 @@ export class ReaderCache {
 
 export class ReaderRequests {
   readonly failed = new Set<string>()
-  private readonly transientFailures = new Set<string>()
-  private readonly retriedOnSight = new Set<string>()
   private readonly pendingChapters = new Map<number, Promise<ReaderChapter>>()
-  private readonly downloads = new Map<string, Download>()
+  private readonly sources = new Map<string, ImageSource>()
+  private order: string[] = []
+  private orderSet = new Set<string>()
+  private cursor = 0
+  private downloadJob: { url: string; controller: AbortController; finished?: Promise<void> } | undefined
+  private decodeJob: Promise<void> | undefined
+  private directory: Promise<string | null> | undefined
+  private nextFile = 0
   private readonly timings = new Map<string, ImageTiming>()
   private readonly lifetime = new AbortController()
   private wanted: string[] = []
@@ -87,12 +93,7 @@ export class ReaderRequests {
     if (existing && existing.startedAt === undefined) return existing
 
     const timing: ImageTiming = { queuedAt: Date.now() }
-    this.timings.delete(url)
     this.timings.set(url, timing)
-    if (this.timings.size > 40) {
-      const oldest = this.timings.keys().next().value
-      if (oldest !== undefined) this.timings.delete(oldest)
-    }
     return timing
   }
 
@@ -110,83 +111,193 @@ export class ReaderRequests {
     this.observers.get(url)?.forEach(update => update())
   }
 
-  prioritize(urls: string[], visible: string[] = []) {
-    const visibleURLs = new Set(visible)
-    for (const url of visibleURLs) {
-      if (this.transientFailures.has(url) && !this.retriedOnSight.has(url)) {
-        this.retriedOnSight.add(url)
-        this.failed.delete(url)
-        this.transientFailures.delete(url)
-        this.notify(url)
-      }
+  queueImages(urls: string[]) {
+    if (this.lifetime.signal.aborted) return
+    const next = [...new Set(urls.filter(Boolean))]
+    if (next.length === this.order.length && next.every((url, index) => url === this.order[index])) return
+    this.order = next
+    this.orderSet = new Set(next)
+    this.cursor = 0
+    if (this.downloadJob && !this.orderSet.has(this.downloadJob.url)) this.downloadJob.controller.abort()
+    for (const [url, source] of this.sources) {
+      if (this.orderSet.has(url)) continue
+      this.sources.delete(url)
+      this.removeSource(source)
     }
-    const next = [...new Set([...visible, ...urls])]
-    if (next.length !== this.wanted.length || next.some((url, index) => url !== this.wanted[index])) {
-      this.wanted = next
-      for (const [url, timing] of this.timings) {
-        if (timing.startedAt === undefined && !next.includes(url)) this.timings.delete(url)
-      }
-      for (const url of next) this.cache.touch(url)
+    for (const url of this.timings.keys()) {
+      if (this.orderSet.has(url)) continue
+      this.timings.delete(url)
+      this.failed.delete(url)
     }
     for (const url of next) {
-      if (!this.cache.images.has(url) && !this.downloads.has(url) && !this.failed.has(url)) this.markQueued(url)
+      if (!this.sources.has(url) && !this.cache.images.has(url) && !this.failed.has(url) && !this.timings.has(url)) {
+        this.markQueued(url)
+      }
     }
-    const missing = visible.some(url => !this.cache.images.has(url) && !this.downloads.has(url) && !this.failed.has(url))
-    if (missing && this.downloads.size >= 3 && [...this.downloads.values()].every(job =>
-      !job.controller.signal.aborted && !visibleURLs.has(job.url))) {
-      const stale = [...this.downloads.values()].reverse().find(job => !next.includes(job.url))
-      stale?.controller.abort()
-    }
-    this.pump()
+    this.pumpDownloads()
+  }
+
+  prioritize(urls: string[], visible: string[] = []) {
+    this.wanted = [...new Set([...visible, ...urls])]
+    for (const url of this.wanted) this.cache.touch(url)
+    // A decoded image inherited from a previous reader can be evicted before it has its own source file.
+    if (visible.some(url => this.orderSet.has(url) && !this.timings.has(url) && !this.sources.has(url)
+      && !this.cache.images.has(url) && !this.failed.has(url))) this.cursor = 0
+    this.pumpDownloads()
+    this.pumpDecoding()
   }
 
   retry(url: string) {
+    if (!this.orderSet.has(url)) return
     this.failed.delete(url)
-    this.transientFailures.delete(url)
+    this.markQueued(url)
+    this.cursor = 0
     this.prioritize([url, ...this.wanted], [url])
     this.notify(url)
   }
 
   close() {
+    if (this.lifetime.signal.aborted) return
     this.lifetime.abort()
-    for (const download of this.downloads.values()) download.controller.abort()
+    this.downloadJob?.controller.abort()
     this.wanted = []
+    this.order = []
+    this.orderSet.clear()
     this.observers.clear()
     this.timings.clear()
+    this.sources.clear()
+    void this.removeDirectory()
   }
 
-  private pump() {
-    if (this.lifetime.signal.aborted) return
-    for (const url of this.wanted) {
-      if (this.downloads.size >= 3) break
-      if (!this.cache.images.has(url) && !this.downloads.has(url) && !this.failed.has(url)) {
-        const timing = this.markQueued(url)
-        timing.startedAt = Date.now()
-        const download = { url, controller: new AbortController(), timing }
-        this.downloads.set(url, download)
-        void this.download(download)
+  private async removeDirectory() {
+    const directory = this.directory
+    if (!directory) return
+    await Promise.allSettled([this.downloadJob?.finished, this.decodeJob])
+    const path = await directory
+    if (path) {
+      try { await FileManager.remove(path) }
+      catch {} // The system can clear the temporary directory independently.
+    }
+  }
+
+  private removeSource(source: ImageSource) {
+    if ("path" in source) void FileManager.remove(source.path).catch(() => {})
+  }
+
+  private async saveSource(data: Data): Promise<ImageSource> {
+    if (typeof FileManager === "undefined" || !FileManager.temporaryDirectory) return { data }
+    this.directory ??= (async () => {
+      const path = FileManager.temporaryDirectory + "/aimanhua-reader-" + Date.now() + "-" + Math.random().toString(36).slice(2)
+      try {
+        await FileManager.createDirectory(path, true)
+        return path
+      } catch {
+        return null
+      }
+    })()
+    const folder = await this.directory
+    if (!folder) return { data }
+    const path = folder + "/" + ++this.nextFile
+    try {
+      await FileManager.writeAsData(path, data)
+      return { path }
+    } catch {
+      return { data }
+    }
+  }
+
+  private pumpDownloads() {
+    if (this.lifetime.signal.aborted || this.downloadJob) return
+    while (this.cursor < this.order.length) {
+      const url = this.order[this.cursor++]
+      if (this.sources.has(url) || this.cache.images.has(url) || this.failed.has(url)) continue
+      const timing = this.markQueued(url)
+      timing.startedAt = Date.now()
+      const job = { url, controller: new AbortController(), finished: undefined as Promise<void> | undefined }
+      this.downloadJob = job
+      job.finished = this.download(url, timing, job.controller.signal)
+      return
+    }
+  }
+
+  private async fetchImage(url: string, signal: AbortSignal): Promise<Data> {
+    for (let attempt = 0; ; attempt++) {
+      let retryable = true
+      try {
+        const response = await fetch(url, {
+          headers: { "Cache-Control": "no-cache, no-store" },
+          timeout: 25,
+          signal,
+        })
+        if (!response.ok) {
+          retryable = response.status === 408 || response.status >= 500
+          throw new Error("图片加载失败。")
+        }
+        if (signal.aborted) throw new Error("图片下载已取消。")
+        return await response.data()
+      } catch (error) {
+        if (signal.aborted || !retryable || attempt > 0) throw error
+        await new Promise<void>(resolve => setTimeout(resolve, 350))
+        if (signal.aborted) throw error
       }
     }
   }
 
-  private async download({ url, controller, timing }: Download) {
-    const { signal } = controller
-    let transient = true
+  private async download(url: string, timing: ImageTiming, signal: AbortSignal) {
     try {
-      const response = await fetch(url, {
-        headers: { "Cache-Control": "no-cache, no-store" },
-        timeout: 25,
-        signal,
-      })
-      if (!response.ok) {
-        transient = response.status === 408 || response.status === 429 || response.status >= 500
-        throw new Error("图片加载失败。")
-      }
-      if (signal.aborted) return
-      const data = await response.data()
+      const data = await this.fetchImage(url, signal)
       if (signal.aborted) return
       timing.receivedAt = Date.now()
-      transient = false
+      const source = await this.saveSource(data)
+      if (signal.aborted || this.lifetime.signal.aborted) {
+        this.removeSource(source)
+        return
+      }
+      this.sources.set(url, source)
+      this.pumpDecoding()
+    } catch {
+      if (!signal.aborted) {
+        timing.finishedAt = Date.now()
+        timing.outcome = "failed"
+        this.failed.add(url)
+        this.notify(url)
+        this.changed(url)
+      }
+    } finally {
+      if (signal.aborted) {
+        timing.finishedAt = Date.now()
+        timing.outcome = "cancelled"
+      }
+      this.downloadJob = undefined
+      this.pumpDownloads()
+    }
+  }
+
+  private pumpDecoding() {
+    if (this.lifetime.signal.aborted || this.decodeJob) return
+    const url = this.wanted.find(item =>
+      this.sources.has(item) && !this.cache.images.has(item) && !this.failed.has(item))
+    if (!url) return
+    const source = this.sources.get(url)!
+    const timing = this.timings.get(url)
+    // Schedule decoding separately so it doesn’t hold the network queue.
+    this.decodeJob = Promise.resolve().then(() => this.decode(url, source, timing)).finally(() => {
+      this.decodeJob = undefined
+      this.pumpDecoding()
+    })
+  }
+
+  private async decode(url: string, source: ImageSource, timing?: ImageTiming) {
+    if (this.lifetime.signal.aborted || !this.wanted.includes(url) || this.sources.get(url) !== source) return
+    if (timing) {
+      timing.processingAt = Date.now()
+      timing.finishedAt = undefined
+      timing.outcome = undefined
+    }
+    try {
+      const data = "path" in source ? await FileManager.readAsData(source.path) : source.data
+      if (this.lifetime.signal.aborted || this.sources.get(url) !== source) return
+      if (!data) throw new Error("图片缓存已丢失。")
       const image = UIImage.fromData(data)
       if (!image) throw new Error("图片解码失败。")
       const inset = 2 / image.scale
@@ -194,25 +305,17 @@ export class ReaderRequests {
         ? image.croppedTo?.({ x: inset, y: 0, width: image.width - inset * 2, height: image.height })
         : null
       this.cache.store(url, cropped ?? image)
-      timing.outcome = "ready"
-      timing.finishedAt = Date.now()
+      if (timing) timing.outcome = "ready"
       for (const evicted of this.cache.trim(new Set(this.wanted))) this.notify(evicted)
     } catch {
-      if (!signal.aborted) {
-        this.failed.add(url)
-        if (transient) this.transientFailures.add(url)
-      }
-    } finally {
-      if (timing.finishedAt === undefined) {
-        timing.finishedAt = Date.now()
-        timing.outcome = signal.aborted ? "cancelled" : "failed"
-      }
-      this.downloads.delete(url)
-      if (!this.lifetime.signal.aborted && !signal.aborted) {
-        this.notify(url)
-        this.changed(url)
-      }
-      this.pump()
+      if (this.lifetime.signal.aborted || this.sources.get(url) !== source) return
+      this.sources.delete(url)
+      this.removeSource(source)
+      this.failed.add(url)
+      if (timing) timing.outcome = "failed"
     }
+    if (timing) timing.finishedAt = Date.now()
+    this.notify(url)
+    this.changed(url)
   }
 }
