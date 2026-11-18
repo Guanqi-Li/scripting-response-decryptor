@@ -603,6 +603,27 @@ test('resuming at page 24 downloads its neighbors first and manual retry preempt
   assert.equal(active, 0)
 })
 
+test('manual chapter switching aborts all old downloads before starting the new chapter', async () => {
+  const jobs = []
+  const { ReaderCache, ReaderRequests } = load('reader-cache.ts', {}, {
+    fetch: (url, { signal }) => new Promise((resolve, reject) => {
+      jobs.push({ url, signal, resolve })
+      signal.addEventListener('abort', () => reject(Error('aborted')), { once: true })
+    }),
+  })
+  const requests = new ReaderRequests(new ReaderCache(), 7)
+  requests.queueImages(['/1', '/2', '/3', '/4', '/5', '/6'])
+  assert.equal(jobs.length, 5)
+  requests.pauseImages()
+  assert.ok(jobs.every(job => job.signal.aborted))
+  requests.prioritize(['/6'], ['/6'])
+  await settle()
+  assert.equal(jobs.length, 5)
+  requests.queueImages(['/new-1', '/new-2', '/new-3', '/new-4', '/new-5', '/new-6'], '/new-1')
+  assert.deepEqual(jobs.slice(5).map(job => job.url), ['/new-1', '/new-2', '/new-3', '/new-4', '/new-5'])
+  requests.close()
+})
+
 test('a transient retry retains its download slot while other pages continue', async () => {
   const jobs = []
   const { ReaderCache, ReaderRequests } = load('reader-cache.ts', {}, {
@@ -695,6 +716,7 @@ function mountReader({ initialPage = 1, failure } = {}) {
     failed = new Set()
     prioritize(urls, visible) { jobs.push({ urls, visible }) }
     queueImages(urls) { orders.push(Array.from(urls)) }
+    pauseImages() { orders.push([]) }
     imageTiming() { return undefined }
     async chapter(chapter) {
       chapterRequests.push(chapter.id)

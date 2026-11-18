@@ -58,6 +58,7 @@ export class ReaderRequests {
   private order: string[] = []
   private orderSet = new Set<string>()
   private focus = ""
+  private imagesPaused = false
   private readonly urgent = new Set<string>()
   private readonly downloadJobs = new Map<string, ImageDownload>()
   private decodeJob: Promise<void> | undefined
@@ -115,8 +116,18 @@ export class ReaderRequests {
     this.observers.get(url)?.forEach(update => update())
   }
 
+  pauseImages() {
+    this.imagesPaused = true
+    this.order = []
+    this.orderSet.clear()
+    this.urgent.clear()
+    this.wanted = []
+    for (const job of this.downloadJobs.values()) job.controller.abort()
+  }
+
   queueImages(urls: string[], focus?: string) {
     if (this.lifetime.signal.aborted) return
+    this.imagesPaused = false
     const next = [...new Set(urls.filter(Boolean))]
     if (focus) this.focus = focus
     if (next.length === this.order.length && next.every((url, index) => url === this.order[index])) {
@@ -235,7 +246,7 @@ export class ReaderRequests {
   }
 
   private pumpDownloads() {
-    if (this.lifetime.signal.aborted) return
+    if (this.lifetime.signal.aborted || this.imagesPaused) return
     for (const url of this.downloadOrder()) {
       if (this.downloadJobs.size >= MAX_DOWNLOADS) break
       if (!this.orderSet.has(url) || this.downloadJobs.has(url) || this.sources.has(url)
@@ -303,7 +314,7 @@ export class ReaderRequests {
   }
 
   private pumpDecoding() {
-    if (this.lifetime.signal.aborted || this.decodeJob) return
+    if (this.lifetime.signal.aborted || this.imagesPaused || this.decodeJob) return
     const url = this.wanted.find(item =>
       this.sources.has(item) && !this.cache.images.has(item) && !this.failed.has(item))
     if (!url) return
@@ -317,7 +328,7 @@ export class ReaderRequests {
   }
 
   private async decode(url: string, source: ImageSource, timing?: ImageTiming) {
-    if (this.lifetime.signal.aborted || !this.wanted.includes(url) || this.sources.get(url) !== source) return
+    if (this.lifetime.signal.aborted || this.imagesPaused || !this.wanted.includes(url) || this.sources.get(url) !== source) return
     if (timing) {
       timing.processingAt = Date.now()
       timing.finishedAt = undefined

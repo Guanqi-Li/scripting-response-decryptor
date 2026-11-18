@@ -156,6 +156,7 @@ export function ChapterReader({ book, chapter, initialPage, opening, cache, dire
   const target = useRef<string | null>(initialTarget?.id ?? null)
   const last = useRef<ReadingRecord | null>(null)
   const lastSaved = useRef("")
+  const switchingChapter = useRef(false)
   const prefetch = useRef<{ forChapter: number } | null>(null)
   const prefetchTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const retry = useRef<(() => void) | null>(null)
@@ -206,6 +207,7 @@ export function ChapterReader({ book, chapter, initialPage, opening, cache, dire
   }
 
   function prioritize(ids: string[]) {
+    if (switchingChapter.current) return
     const items = pages.value
     const positions = pageIndex()
     const indexes = ids.map(id => positions.get(id)).filter((index): index is number => index !== undefined).sort((a, b) => a - b)
@@ -336,6 +338,10 @@ export function ChapterReader({ book, chapter, initialPage, opening, cache, dire
   async function openChapter(next: Chapter, resumePage = 1) {
     if (busy.value || !mounted.current) return
     busy.setValue(true)
+    switchingChapter.current = true
+    clearTimeout(prefetchTimer.current)
+    prefetch.current = null
+    requests.pauseImages()
     error.setValue("")
     retry.current = () => { void openChapter(next, resumePage) }
     try {
@@ -358,11 +364,18 @@ export function ChapterReader({ book, chapter, initialPage, opening, cache, dire
       selected.setValue(data.chapter)
       scrollKey.setValue(scrollKey.value + 1)
       pages.setValue(items)
+      switchingChapter.current = false
       queueChapterImages()
       prioritize([start.id])
     } catch (cause) {
+      switchingChapter.current = false
       setChapterError(cause, "open")
+      if (mounted.current) {
+        queueChapterImages()
+        prioritize(visible.current)
+      }
     } finally {
+      switchingChapter.current = false
       if (mounted.current) busy.setValue(false)
     }
   }
