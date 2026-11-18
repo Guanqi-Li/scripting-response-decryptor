@@ -1,6 +1,6 @@
 {
   "name": "爱漫画",
-  "version": "1.10.4",
+  "version": "1.10.5",
   "entry": "index.tsx",
   "icon": "book.fill",
   "color": "#007AFF",

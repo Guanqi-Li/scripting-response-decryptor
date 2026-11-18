@@ -9,6 +9,9 @@ export type ImageTiming = {
   finishedAt?: number
   outcome?: "ready" | "failed" | "cancelled"
 }
+const MAX_DOWNLOADS = 5
+
+type ImageDownload = { controller: AbortController; finished?: Promise<void> }
 type ImageSource = { path: string } | { data: Data }
 
 export class ReaderCache {
@@ -55,7 +58,7 @@ export class ReaderRequests {
   private order: string[] = []
   private orderSet = new Set<string>()
   private cursor = 0
-  private downloadJob: { url: string; controller: AbortController; finished?: Promise<void> } | undefined
+  private readonly downloadJobs = new Map<string, ImageDownload>()
   private decodeJob: Promise<void> | undefined
   private directory: Promise<string | null> | undefined
   private nextFile = 0
@@ -118,7 +121,9 @@ export class ReaderRequests {
     this.order = next
     this.orderSet = new Set(next)
     this.cursor = 0
-    if (this.downloadJob && !this.orderSet.has(this.downloadJob.url)) this.downloadJob.controller.abort()
+    for (const [url, job] of this.downloadJobs) {
+      if (!this.orderSet.has(url)) job.controller.abort()
+    }
     for (const [url, source] of this.sources) {
       if (this.orderSet.has(url)) continue
       this.sources.delete(url)
@@ -159,7 +164,7 @@ export class ReaderRequests {
   close() {
     if (this.lifetime.signal.aborted) return
     this.lifetime.abort()
-    this.downloadJob?.controller.abort()
+    for (const job of this.downloadJobs.values()) job.controller.abort()
     this.wanted = []
     this.order = []
     this.orderSet.clear()
@@ -172,7 +177,7 @@ export class ReaderRequests {
   private async removeDirectory() {
     const directory = this.directory
     if (!directory) return
-    await Promise.allSettled([this.downloadJob?.finished, this.decodeJob])
+    await Promise.allSettled([...this.downloadJobs.values()].map(job => job.finished).concat(this.decodeJob))
     const path = await directory
     if (path) {
       try { await FileManager.remove(path) }
@@ -207,16 +212,15 @@ export class ReaderRequests {
   }
 
   private pumpDownloads() {
-    if (this.lifetime.signal.aborted || this.downloadJob) return
-    while (this.cursor < this.order.length) {
+    if (this.lifetime.signal.aborted) return
+    while (this.downloadJobs.size < MAX_DOWNLOADS && this.cursor < this.order.length) {
       const url = this.order[this.cursor++]
-      if (this.sources.has(url) || this.cache.images.has(url) || this.failed.has(url)) continue
+      if (this.downloadJobs.has(url) || this.sources.has(url) || this.cache.images.has(url) || this.failed.has(url)) continue
       const timing = this.markQueued(url)
       timing.startedAt = Date.now()
-      const job = { url, controller: new AbortController(), finished: undefined as Promise<void> | undefined }
-      this.downloadJob = job
+      const job: ImageDownload = { controller: new AbortController() }
+      this.downloadJobs.set(url, job)
       job.finished = this.download(url, timing, job.controller.signal)
-      return
     }
   }
 
@@ -268,7 +272,7 @@ export class ReaderRequests {
         timing.finishedAt = Date.now()
         timing.outcome = "cancelled"
       }
-      this.downloadJob = undefined
+      this.downloadJobs.delete(url)
       this.pumpDownloads()
     }
   }

@@ -523,7 +523,7 @@ test('a 33-chapter directory publishes the whole list without showing page one o
   unmount()
 })
 
-test('whole chapters download strictly in order and offscreen originals are reused from temporary files', async () => {
+test('whole chapters start in page order with at most five downloads and reuse temporary files', async () => {
   const jobs = [], files = new Map(), removed = []
   const { ReaderCache, ReaderRequests } = load('reader-cache.ts', {}, {
     fetch: (url, { signal }) => new Promise((resolve, reject) => {
@@ -544,9 +544,12 @@ test('whole chapters download strictly in order and offscreen originals are reus
   requests.queueImages(urls.slice(0, 3))
   requests.prioritize(['/3', '/1'], ['/3'])
   requests.queueImages(urls)
-  for (let i = 0; i < urls.length; i++) {
-    assert.deepEqual(jobs.map(job => job.url), urls.slice(0, i + 1))
-    jobs[i].resolve({ ok: true, data: async () => ({ page: i + 1 }) })
+  assert.deepEqual(jobs.map(job => job.url), urls.slice(0, 5))
+  jobs[3].resolve({ ok: true, data: async () => ({ page: 4 }) })
+  await settle()
+  assert.deepEqual(jobs.map(job => job.url), urls)
+  for (const index of [0, 1, 2, 4, 5]) {
+    jobs[index].resolve({ ok: true, data: async () => ({ page: index + 1 }) })
     await settle()
   }
   assert.equal(files.size, urls.length)
@@ -561,7 +564,7 @@ test('whole chapters download strictly in order and offscreen originals are reus
   assert.match(removed[0], /^\/tmp\/aimanhua-reader-/)
 })
 
-test('a transient retry completes the current page before starting the next page', async () => {
+test('a transient retry retains its download slot while other pages continue', async () => {
   const jobs = []
   const { ReaderCache, ReaderRequests } = load('reader-cache.ts', {}, {
     setTimeout: callback => callback(),
@@ -574,10 +577,10 @@ test('a transient retry completes the current page before starting the next page
   requests.queueImages(['/1', '/2'])
   jobs[0].resolve({ ok: false, status: 503 })
   await settle()
-  assert.deepEqual(jobs.map(job => job.url), ['/1', '/1'])
-  jobs[1].resolve({ ok: false, status: 503 })
+  assert.deepEqual(jobs.map(job => job.url), ['/1', '/2', '/1'])
+  jobs[2].resolve({ ok: false, status: 503 })
   await settle()
-  assert.deepEqual(jobs.map(job => job.url), ['/1', '/1', '/2'])
+  assert.deepEqual(jobs.map(job => job.url), ['/1', '/2', '/1'])
   assert.equal(requests.failed.has('/1'), true)
   requests.close()
 })
@@ -601,7 +604,7 @@ test('image diagnostics distinguish queue time, download time, and native image 
   requests.queueImages(['/1', '/2', '/3', '/4'])
   requests.prioritize(['/1'], ['/1'])
   assert.equal(requests.imageTiming('/4').queuedAt, 100)
-  assert.equal(requests.imageTiming('/4').startedAt, undefined)
+  assert.equal(requests.imageTiming('/4').startedAt, 100)
 
   now = 135
   jobs.get('/1')({ ok: true, data: async () => { now = 190; return {} } })
@@ -609,8 +612,8 @@ test('image diagnostics distinguish queue time, download time, and native image 
   assert.deepEqual({ ...requests.imageTiming('/1') }, {
     queuedAt: 100, startedAt: 100, receivedAt: 190, processingAt: 190, finishedAt: 200, outcome: 'ready',
   })
-  assert.equal(requests.imageTiming('/2').startedAt, 190)
-  assert.equal(requests.imageTiming('/4').startedAt, undefined)
+  assert.equal(requests.imageTiming('/2').startedAt, 100)
+  assert.equal(requests.imageTiming('/4').startedAt, 100)
   requests.close()
   assert.equal(requests.imageTiming('/1'), undefined)
 })
