@@ -564,6 +564,45 @@ test('whole chapters start in page order with at most five downloads and reuse t
   assert.match(removed[0], /^\/tmp\/aimanhua-reader-/)
 })
 
+test('resuming at page 24 downloads its neighbors first and manual retry preempts a distant download', async () => {
+  const jobs = []
+  let active = 0, maximum = 0
+  const { ReaderCache, ReaderRequests } = load('reader-cache.ts', {}, {
+    fetch: (url, { signal }) => new Promise((resolve, reject) => {
+      active++
+      maximum = Math.max(maximum, active)
+      let settled = false
+      function finish(callback, value) {
+        if (settled) return
+        settled = true
+        active--
+        callback(value)
+      }
+      jobs.push({ url, signal, resolve: value => finish(resolve, value) })
+      signal.addEventListener('abort', () => finish(reject, Error('aborted')), { once: true })
+    }),
+  })
+  const requests = new ReaderRequests(new ReaderCache(), 7)
+  const urls = Array.from({ length: 30 }, (_, index) => '/' + (index + 1))
+  requests.queueImages(urls, '/24')
+  requests.prioritize(['/24', '/25', '/26', '/22', '/23'], ['/24'])
+  assert.deepEqual(jobs.map(job => job.url), ['/24', '/25', '/26', '/22', '/23'])
+  jobs[0].resolve({ ok: false, status: 404 })
+  await settle()
+  assert.equal(jobs.at(-1).url, '/27')
+  requests.retry('/24')
+  await settle()
+  assert.equal(jobs.at(-1).url, '/24')
+  assert.equal(jobs.find(job => job.url === '/27').signal.aborted, true)
+  assert.equal(maximum, 5)
+  jobs.at(-1).resolve({ ok: true, data: async () => ({}) })
+  await settle()
+  assert.equal(jobs.at(-1).url, '/27')
+  requests.close()
+  await settle()
+  assert.equal(active, 0)
+})
+
 test('a transient retry retains its download slot while other pages continue', async () => {
   const jobs = []
   const { ReaderCache, ReaderRequests } = load('reader-cache.ts', {}, {

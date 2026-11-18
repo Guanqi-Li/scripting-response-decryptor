@@ -57,7 +57,8 @@ export class ReaderRequests {
   private readonly sources = new Map<string, ImageSource>()
   private order: string[] = []
   private orderSet = new Set<string>()
-  private cursor = 0
+  private focus = ""
+  private readonly urgent = new Set<string>()
   private readonly downloadJobs = new Map<string, ImageDownload>()
   private decodeJob: Promise<void> | undefined
   private directory: Promise<string | null> | undefined
@@ -114,13 +115,16 @@ export class ReaderRequests {
     this.observers.get(url)?.forEach(update => update())
   }
 
-  queueImages(urls: string[]) {
+  queueImages(urls: string[], focus?: string) {
     if (this.lifetime.signal.aborted) return
     const next = [...new Set(urls.filter(Boolean))]
-    if (next.length === this.order.length && next.every((url, index) => url === this.order[index])) return
+    if (focus) this.focus = focus
+    if (next.length === this.order.length && next.every((url, index) => url === this.order[index])) {
+      this.pumpDownloads()
+      return
+    }
     this.order = next
     this.orderSet = new Set(next)
-    this.cursor = 0
     for (const [url, job] of this.downloadJobs) {
       if (!this.orderSet.has(url)) job.controller.abort()
     }
@@ -133,6 +137,7 @@ export class ReaderRequests {
       if (this.orderSet.has(url)) continue
       this.timings.delete(url)
       this.failed.delete(url)
+      this.urgent.delete(url)
     }
     for (const url of next) {
       if (!this.sources.has(url) && !this.cache.images.has(url) && !this.failed.has(url) && !this.timings.has(url)) {
@@ -145,9 +150,7 @@ export class ReaderRequests {
   prioritize(urls: string[], visible: string[] = []) {
     this.wanted = [...new Set([...visible, ...urls])]
     for (const url of this.wanted) this.cache.touch(url)
-    // A decoded image inherited from a previous reader can be evicted before it has its own source file.
-    if (visible.some(url => this.orderSet.has(url) && !this.timings.has(url) && !this.sources.has(url)
-      && !this.cache.images.has(url) && !this.failed.has(url))) this.cursor = 0
+    if (visible[0]) this.focus = visible[0]
     this.pumpDownloads()
     this.pumpDecoding()
   }
@@ -155,9 +158,16 @@ export class ReaderRequests {
   retry(url: string) {
     if (!this.orderSet.has(url)) return
     this.failed.delete(url)
-    this.markQueued(url)
-    this.cursor = 0
-    this.prioritize([url, ...this.wanted], [url])
+    this.urgent.add(url)
+    if (!this.downloadJobs.has(url)) this.markQueued(url)
+    if (this.downloadJobs.size >= MAX_DOWNLOADS && !this.downloadJobs.has(url)) {
+      const focus = this.order.indexOf(this.focus)
+      const candidates = [...this.downloadJobs.entries()].filter(([item]) => !this.urgent.has(item))
+      candidates.sort(([left], [right]) =>
+        Math.abs(this.order.indexOf(right) - focus) - Math.abs(this.order.indexOf(left) - focus))
+      candidates[0]?.[1].controller.abort()
+    }
+    this.prioritize([url, ...this.wanted])
     this.notify(url)
   }
 
@@ -168,6 +178,7 @@ export class ReaderRequests {
     this.wanted = []
     this.order = []
     this.orderSet.clear()
+    this.urgent.clear()
     this.observers.clear()
     this.timings.clear()
     this.sources.clear()
@@ -211,11 +222,24 @@ export class ReaderRequests {
     }
   }
 
+  private downloadOrder(): string[] {
+    const index = this.order.indexOf(this.focus)
+    if (index < 0) return [...this.urgent, ...this.order]
+    const nearby = [
+      ...this.order.slice(index, index + 3),
+      ...this.order.slice(Math.max(0, index - 2), index),
+    ]
+    // Keep the rest of the active chapter ahead of chapters that were only prefetched.
+    const pending = [...this.order.slice(index + 3), ...this.order.slice(0, Math.max(0, index - 2))]
+    return [...new Set([...this.urgent, ...nearby, ...pending])]
+  }
+
   private pumpDownloads() {
     if (this.lifetime.signal.aborted) return
-    while (this.downloadJobs.size < MAX_DOWNLOADS && this.cursor < this.order.length) {
-      const url = this.order[this.cursor++]
-      if (this.downloadJobs.has(url) || this.sources.has(url) || this.cache.images.has(url) || this.failed.has(url)) continue
+    for (const url of this.downloadOrder()) {
+      if (this.downloadJobs.size >= MAX_DOWNLOADS) break
+      if (!this.orderSet.has(url) || this.downloadJobs.has(url) || this.sources.has(url)
+        || this.cache.images.has(url) || this.failed.has(url)) continue
       const timing = this.markQueued(url)
       timing.startedAt = Date.now()
       const job: ImageDownload = { controller: new AbortController() }
@@ -272,6 +296,7 @@ export class ReaderRequests {
         timing.finishedAt = Date.now()
         timing.outcome = "cancelled"
       }
+      if (!signal.aborted) this.urgent.delete(url)
       this.downloadJobs.delete(url)
       this.pumpDownloads()
     }

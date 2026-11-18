@@ -196,7 +196,9 @@ export function ChapterReader({ book, chapter, initialPage, opening, cache, dire
   }
 
   function queueChapterImages(next: string[] = []) {
-    requests.queueImages([...pages.value.map(page => page.url), ...next])
+    const id = target.current ?? activePage.current?.id ?? visible.current[0]
+    const focus = pages.value.find(page => page.id === id)?.url
+    requests.queueImages([...pages.value.map(page => page.url), ...next], focus)
   }
 
   function reachedPrefetchPoint(page: ReaderPage, tail: ReaderPage): boolean {
@@ -212,7 +214,7 @@ export function ChapterReader({ book, chapter, initialPage, opening, cache, dire
     const start = indexes[0]
     const end = indexes[indexes.length - 1]
     const ahead = items.slice(end + 1, end + 6)
-    const behind = items.slice(Math.max(0, start - 2), start).reverse()
+    const behind = items.slice(Math.max(0, start - 2), start)
     const tail = items[items.length - 1]
     const nearEnd = reachedPrefetchPoint(items[end], tail)
     const prefetchState = prefetch.current
